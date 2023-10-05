@@ -1,5 +1,7 @@
-# Sparse Local Patch Transformer
+## **New** Dynamic Sparse Local Patch Transformer (DSLPT) is released at [Here](https://github.com/Jiahao-UTS/DSLPT).
 
+# Sparse Local Patch Transformer
+## training code is released at [Here](https://github.com/Jiahao-UTS/SLPT_Training).
 PyTorch evaluation code and pretrained models for **SLPT** (Sparse Local Patch Transformer).
 
 <img src='Figures/overview.jpg' width="1000px">
