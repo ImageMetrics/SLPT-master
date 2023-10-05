@@ -71,6 +71,7 @@ def crop_img(img, bbox, transform):
 
     return input, trans
 
+
 def face_detection(img, model, im_width, im_height):
     img = cv2.resize(img, (320, 240), interpolation=cv2.INTER_NEAREST)
     img = np.float32(img)
@@ -125,9 +126,10 @@ def face_detection(img, model, im_width, im_height):
 
     return dets
 
+
 def find_max_box(box_array):
     potential_box = []
-    for b in dets:
+    for b in box_array:
         if b[14] < args.vis_thres:
             continue
         potential_box.append(np.array([b[0], b[1], b[2], b[3], b[14]], dtype=np.int))
@@ -145,6 +147,147 @@ def find_max_box(box_array):
         return box_array[Max_index]
     else:
         return None
+
+
+class Sparse_alignment_network_refine(Sparse_alignment_network):
+    def __init__(self, *args):
+        super().__init__(*args)
+
+    def forward(self, image, landmarks_1):
+        bs = image.size(0)
+
+        output_list = []
+
+        feature_map = self.backbone(image)
+
+        # initial_landmarks = self.initial_points.repeat(bs, 1, 1).to(image.device)
+        #
+        # # stage_1
+        # ROI_anchor_1, bbox_size_1, start_anchor_1 = self.ROI_1(initial_landmarks.detach())
+        # ROI_anchor_1 = ROI_anchor_1.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
+        # ROI_feature_1 = self.interpolation(feature_map, ROI_anchor_1.detach()).view(bs, self.num_point, self.Sample_num,
+        #                                                                     self.Sample_num, self.d_model)
+        # ROI_feature_1 = ROI_feature_1.view(bs * self.num_point, self.Sample_num, self.Sample_num,
+        #                              self.d_model).permute(0, 3, 2, 1)
+        #
+        # transformer_feature_1 = self.feature_extractor(ROI_feature_1).view(bs, self.num_point, self.d_model)
+        #
+        # offset_1 = self.Transformer(transformer_feature_1)
+        # offset_1 = self.out_layer(offset_1)
+        #
+        # landmarks_1 = start_anchor_1.unsqueeze(1) + bbox_size_1.unsqueeze(1) * offset_1
+        # output_list.append(landmarks_1)
+
+        # stage_2
+        ROI_anchor_2, bbox_size_2, start_anchor_2 = self.ROI_2(landmarks_1[:, -1, :, :].detach())
+        ROI_anchor_2 = ROI_anchor_2.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
+        ROI_feature_2 = self.interpolation(feature_map, ROI_anchor_2.detach()).view(bs, self.num_point, self.Sample_num,
+                                                                                 self.Sample_num, self.d_model)
+        ROI_feature_2 = ROI_feature_2.view(bs * self.num_point, self.Sample_num, self.Sample_num,
+                                           self.d_model).permute(0, 3, 2, 1)
+
+        transformer_feature_2 = self.feature_extractor(ROI_feature_2).view(bs, self.num_point, self.d_model)
+
+        offset_2 = self.Transformer(transformer_feature_2)
+        offset_2 = self.out_layer(offset_2)
+
+        landmarks_2 = start_anchor_2.unsqueeze(1) + bbox_size_2.unsqueeze(1) * offset_2
+        output_list.append(landmarks_2)
+
+        # stage_3
+        ROI_anchor_3, bbox_size_3, start_anchor_3 = self.ROI_3(landmarks_2[:, -1, :, :].detach())
+        ROI_anchor_3 = ROI_anchor_3.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
+        ROI_feature_3= self.interpolation(feature_map, ROI_anchor_3.detach()).view(bs, self.num_point, self.Sample_num,
+                                                                                   self.Sample_num, self.d_model)
+        ROI_feature_3 = ROI_feature_3.view(bs * self.num_point, self.Sample_num, self.Sample_num,
+                                           self.d_model).permute(0, 3, 2, 1)
+
+        transformer_feature_3 = self.feature_extractor(ROI_feature_3).view(bs, self.num_point, self.d_model)
+
+        offset_3 = self.Transformer(transformer_feature_3)
+        offset_3 = self.out_layer(offset_3)
+
+        landmarks_3 = start_anchor_3.unsqueeze(1) + bbox_size_3.unsqueeze(1) * offset_3
+        output_list.append(landmarks_3)
+
+        return output_list
+
+
+def run_with_detector(image_files, cfg, net, normalize, model):
+    for image_file in image_files:
+        frame = cv2.imread(image_file)
+        im_width = frame.shape[1]
+        im_height = frame.shape[0]
+
+        dets = face_detection(frame.copy(), net, 320, 240)
+        bbox = find_max_box(dets)
+
+        if bbox is not None:
+            bbox[0] = int(bbox[0] / 320.0 * im_width + 0.5)
+            bbox[2] = int(bbox[2] / 320.0 * im_width + 0.5)
+            bbox[1] = int(bbox[1] / 240.0 * im_height + 0.5)
+            bbox[3] = int(bbox[3] / 240.0 * im_height + 0.5)
+            alignment_input, trans = crop_img(frame.copy(), bbox, normalize)
+
+            outputs_initial = model(alignment_input.cuda())
+            output = outputs_initial[2][0, -1, :, :].cpu().numpy()
+
+            landmark = utils.transform_pixel_v2(output * cfg.MODEL.IMG_SIZE, trans, inverse=True)
+
+            # cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 0, 255), 3)
+            frame = draw_landmark(landmark, frame)
+            # out.write(frame)
+            cv2.imshow('res', frame)
+
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+
+def get_bbox(landmarks, cfg):
+    max_index = np.max(landmarks, axis=0)
+    min_index = np.min(landmarks, axis=0)
+    bbox = np.array([min_index[0], min_index[1], max_index[0] - min_index[0],
+                         max_index[1] - min_index[1]])
+
+
+    # scale up by average factor
+    scale_fac = cfg.HEADCAM.FRACTION
+    center_point = bbox[0:2] + (bbox[2:4] / 2)
+    wh_scaled = bbox[2:4] * scale_fac
+    bbox_scaled = bbox
+    bbox_scaled[0:2] = center_point - (wh_scaled * 0.5)
+    bbox_scaled[2:4] = wh_scaled
+
+    return bbox_scaled
+
+
+def run_refinement(image_files, image_landmarks, cfg, net, normalize, model):
+    for image_file, landmarks in zip(image_files, image_landmarks):
+        frame = cv2.imread(image_file)
+        im_width = frame.shape[1]
+        im_height = frame.shape[0]
+
+        bbox = get_bbox(landmarks, cfg)
+
+        bbox[0] = int(bbox[0] / 320.0 * im_width + 0.5)
+        bbox[2] = int(bbox[2] / 320.0 * im_width + 0.5)
+        bbox[1] = int(bbox[1] / 240.0 * im_height + 0.5)
+        bbox[3] = int(bbox[3] / 240.0 * im_height + 0.5)
+        alignment_input, trans = crop_img(frame.copy(), bbox, normalize)
+
+        outputs_initial = model(alignment_input.cuda())
+        output = outputs_initial[2][0, -1, :, :].cpu().numpy()
+
+        landmark = utils.transform_pixel_v2(output * cfg.MODEL.IMG_SIZE, trans, inverse=True)
+
+        # cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 0, 255), 3)
+        frame = draw_landmark(landmark, frame)
+        # out.write(frame)
+        cv2.imshow('res', frame)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
 
 
 if __name__ == '__main__':
@@ -166,10 +309,17 @@ if __name__ == '__main__':
     net = net.to(device)
     print('Finished loading Face Detector!')
 
-    model = Sparse_alignment_network(cfg.WFLW.NUM_POINT, cfg.MODEL.OUT_DIM,
+    do_refinement = True
+    if do_refinement:
+        model = Sparse_alignment_network_refine(cfg.HEADCAM.NUM_POINT, cfg.MODEL.OUT_DIM,
+                                         cfg.MODEL.TRAINABLE, cfg.MODEL.INTER_LAYER,
+                                         cfg.MODEL.DILATION, cfg.TRANSFORMER.NHEAD,
+                                         cfg.TRANSFORMER.FEED_DIM, cfg.HEADCAM.INITIAL_PATH, cfg)
+    else:
+        model = Sparse_alignment_network(cfg.HEADCAM.NUM_POINT, cfg.MODEL.OUT_DIM,
                                      cfg.MODEL.TRAINABLE, cfg.MODEL.INTER_LAYER,
                                      cfg.MODEL.DILATION, cfg.TRANSFORMER.NHEAD,
-                                     cfg.TRANSFORMER.FEED_DIM, cfg.WFLW.INITIAL_PATH, cfg)
+                                     cfg.TRANSFORMER.FEED_DIM, cfg.HEADCAM.INITIAL_PATH, cfg)
     model = torch.nn.DataParallel(model, device_ids=cfg.GPUS).cuda()
 
     checkpoint_file = os.path.join(args.modelDir, args.checkpoint)
@@ -181,11 +331,12 @@ if __name__ == '__main__':
 
     print('Finished loading face landmark detector')
 
-    # Camera Begin
-    # cap = cv2.VideoCapture(args.video_source)
 
-    # im_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    # im_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    # test data file
+    test_data_file = r"C:\temp\SLPT\TestData\video_2023-06-05_17-26-06_Frames.npz"
+    npz_file = np.load(test_data_file)
+    image_files = npz_file['image_files']
+    landmarks = npz_file['landmarks']
 
     # Video writer
     # out = cv2.VideoWriter('out4.mp4', cv2.VideoWriter_fourcc('M', 'P', '4', 'V'), 20, (im_width, im_height))
@@ -198,43 +349,9 @@ if __name__ == '__main__':
         normalize,
     ])
 
-    for vid_ind in range(1,101):
-        output_dir = fr'C:\temp\git\benchmarks_headpose\vid_{vid_ind:03d}'
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-        with open(fr'C:\temp\git\benchmarks_headpose\vid_{vid_ind:03d}.txt', 'r') as f:
-            im_no = 1
-            for line in f:
-                frame = cv2.imread(line.strip())
-
-                im_width = frame.shape[1]
-                im_height = frame.shape[0]
-
-                dets = face_detection(frame.copy(), net, 320, 240)
-                bbox = find_max_box(dets)
-
-                if bbox is not None:
-                    bbox[0] = int(bbox[0] / 320.0 * im_width + 0.5)
-                    bbox[2] = int(bbox[2] / 320.0 * im_width + 0.5)
-                    bbox[1] = int(bbox[1] / 240.0 * im_height + 0.5)
-                    bbox[3] = int(bbox[3] / 240.0 * im_height + 0.5)
-                    alignment_input, trans = crop_img(frame.copy(), bbox, normalize)
-
-                    outputs_initial = model(alignment_input.cuda())
-                    output = outputs_initial[2][0, -1, :, :].cpu().numpy()
-
-                    landmark = utils.transform_pixel_v2(output * cfg.MODEL.IMG_SIZE, trans, inverse=True)
-
-                    # cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 0, 255), 3)
-                    frame = draw_landmark(landmark, frame)
-                    # out.write(frame)
-                    cv2.imshow('res', frame)
-
-                    output_file_name = os.path.join(output_dir, f'{im_no:05d}.csv')
-                    np.savetxt(output_file_name, landmark, delimiter=",")
-                    im_no += 1
-
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        break
+    if do_refinement:
+        run_refinement(image_files, landmarks, cfg, net, normalize, model)
+    else:
+        run_with_detector(image_files, cfg, net, normalize, model)
 
 
