@@ -268,15 +268,14 @@ def run_refinement(image_files, image_landmarks, cfg, net, normalize, model):
         im_height = frame.shape[0]
 
         bbox = get_bbox(landmarks, cfg)
-
-        bbox[0] = int(bbox[0] / 320.0 * im_width + 0.5)
-        bbox[2] = int(bbox[2] / 320.0 * im_width + 0.5)
-        bbox[1] = int(bbox[1] / 240.0 * im_height + 0.5)
-        bbox[3] = int(bbox[3] / 240.0 * im_height + 0.5)
         alignment_input, trans = crop_img(frame.copy(), bbox, normalize)
 
-        outputs_initial = model(alignment_input.cuda())
-        output = outputs_initial[2][0, -1, :, :].cpu().numpy()
+        landmarks_model = torch.from_numpy(
+            utils.transform_pixel_v2(landmarks, trans) / cfg.MODEL.IMG_SIZE
+        ).view(1, 1, landmarks.shape[0], landmarks.shape[1]).float()
+
+        outputs_initial = model(alignment_input.cuda(), landmarks_model.cuda())
+        output = outputs_initial[-1][0, -1, :, :].cpu().numpy()
 
         landmark = utils.transform_pixel_v2(output * cfg.MODEL.IMG_SIZE, trans, inverse=True)
 
@@ -289,11 +288,18 @@ def run_refinement(image_files, image_landmarks, cfg, net, normalize, model):
             break
 
 
+device = None
+args = None
 
-if __name__ == '__main__':
+
+def main():
+    do_refinement = True
+
+    global args
     args = parse_args()
     update_config(cfg, args)
 
+    global device
     device = torch.device(args.device)
 
     torch.set_grad_enabled(False)
@@ -309,7 +315,6 @@ if __name__ == '__main__':
     net = net.to(device)
     print('Finished loading Face Detector!')
 
-    do_refinement = True
     if do_refinement:
         model = Sparse_alignment_network_refine(cfg.HEADCAM.NUM_POINT, cfg.MODEL.OUT_DIM,
                                          cfg.MODEL.TRAINABLE, cfg.MODEL.INTER_LAYER,
@@ -330,7 +335,6 @@ if __name__ == '__main__':
     model.eval()
 
     print('Finished loading face landmark detector')
-
 
     # test data file
     test_data_file = r"C:\temp\SLPT\TestData\video_2023-06-05_17-26-06_Frames.npz"
@@ -355,3 +359,5 @@ if __name__ == '__main__':
         run_with_detector(image_files, cfg, net, normalize, model)
 
 
+if __name__ == '__main__':
+    main()
