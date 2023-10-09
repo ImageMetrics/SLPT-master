@@ -253,19 +253,21 @@ def get_bbox(landmarks, cfg):
 
 
     # scale up by average factor
-    scale_fac = cfg.HEADCAM.FRACTION
+    scale_fac = cfg.HEADCAM.FRACTION / 1.15  # a 1.15 scale is applied later
     center_point = bbox[0:2] + (bbox[2:4] / 2)
     wh_scaled = bbox[2:4] * scale_fac
     wh_scaled[:] = np.max(wh_scaled)
+
+    # output bound box is [pt1x, pt1y, pt2x, pt2y]
     bbox_scaled = bbox
     bbox_scaled[0:2] = center_point - (wh_scaled * 0.5)
-    bbox_scaled[2:4] = wh_scaled
+    bbox_scaled[2:4] = center_point + (wh_scaled * 0.5)
 
     return bbox_scaled
 
 
 def run_refinement(image_files, image_landmarks, cfg, normalize, model):
-    redo_track = False
+    redo_track = True
     display = False
 
     output_dir = r'C:\temp\SLPT\TestData\SLPT'
@@ -367,6 +369,9 @@ def main():
         # test_data_file = r"C:\temp\SLPT\TestData\video_2023-06-05_17-26-06_Frames.npz"
         # test_data_file = r"C:\temp\SLPT\TestData\Alfonso_l_sc04_001_39_1_Frames.npz"
         # test_data_file = r"C:\temp\SLPT\TestData\FaceCapture_Catt_Act6.1Scene1_Frames.npz"
+
+        # if os.path.basename(test_data_file) != 'Jie.npz':
+        #     continue
 
         npz_file = np.load(test_data_file)
         image_files = npz_file['image_files']
