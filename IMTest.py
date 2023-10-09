@@ -257,6 +257,7 @@ def get_bbox(landmarks, cfg):
     center_point = bbox[0:2] + (bbox[2:4] / 2)
     wh_scaled = bbox[2:4] * scale_fac
     wh_scaled[:] = np.max(wh_scaled)
+    wh_scaled += 1  # make sure the box isn't 0 width
 
     # output bound box is [pt1x, pt1y, pt2x, pt2y]
     bbox_scaled = bbox
@@ -267,7 +268,7 @@ def get_bbox(landmarks, cfg):
 
 
 def run_refinement(image_files, image_landmarks, cfg, normalize, model):
-    redo_track = True
+    redo_track = False
     display = False
 
     output_dir = r'C:\temp\SLPT\TestData\SLPT'
@@ -313,12 +314,61 @@ def run_refinement(image_files, image_landmarks, cfg, normalize, model):
     np.savez(output_file, image_files=image_files, landmarks=refined_landmarks)
 
 
+def run_frame_to_frame(image_files, image_landmarks, cfg, normalize, model):
+    redo_track = False
+    display = False
+
+    output_dir = r'C:\temp\SLPT\TestData\Update'
+    refined_landmarks = image_landmarks
+    output_file = os.path.basename(os.path.dirname(image_files[0]))
+    print(f'Processing {output_file}')
+    output_file = os.path.join(output_dir, f'{output_file}.npz')
+
+    if not redo_track and os.path.exists(output_file):
+        return
+
+    import tqdm
+    prev_landmarks = image_landmarks[0]
+    for i, image_file in tqdm.tqdm(enumerate(image_files)):
+        frame = cv2.imread(image_file)
+
+        bbox = get_bbox(prev_landmarks, cfg)
+        alignment_input, trans = crop_img(frame.copy(), bbox, normalize)
+
+        landmarks_model = torch.from_numpy(
+            utils.transform_pixel_v2(prev_landmarks, trans) / cfg.MODEL.IMG_SIZE
+        ).view(1, 1, prev_landmarks.shape[0], prev_landmarks.shape[1]).float()
+
+        outputs_initial = model(alignment_input.cuda(),
+                                landmarks_1=landmarks_model.cuda(),
+                                landmarks_2=None,
+                                )
+        output = outputs_initial[-1][0, -1, :, :].cpu().numpy()
+
+        landmark = utils.transform_pixel_v2(output * cfg.MODEL.IMG_SIZE, trans, inverse=True)
+
+        refined_landmarks[i, :, :] = landmark
+        prev_landmarks = landmark
+
+        if display:
+            # cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 0, 255), 3)
+            frame = draw_landmark(landmark, frame)
+            # out.write(frame)
+            cv2.imshow('res', frame)
+
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+    np.savez(output_file, image_files=image_files, landmarks=refined_landmarks)
+
+
 device = None
 args = None
 
 
 def main():
-    do_refinement = True
+    do_refinement = False
+    do_frame_to_frame = True
 
     global args
     args = parse_args()
@@ -340,7 +390,7 @@ def main():
     net = net.to(device)
     print('Finished loading Face Detector!')
 
-    if do_refinement:
+    if do_refinement or do_frame_to_frame:
         model = Sparse_alignment_network_refine(cfg.HEADCAM.NUM_POINT, cfg.MODEL.OUT_DIM,
                                          cfg.MODEL.TRAINABLE, cfg.MODEL.INTER_LAYER,
                                          cfg.MODEL.DILATION, cfg.TRANSFORMER.NHEAD,
@@ -390,6 +440,8 @@ def main():
 
         if do_refinement:
             run_refinement(image_files, landmarks, cfg, normalize, model)
+        elif do_frame_to_frame:
+            run_frame_to_frame(image_files, landmarks, cfg, normalize, model)
         else:
             run_with_detector(image_files, cfg, net, normalize, model)
 
