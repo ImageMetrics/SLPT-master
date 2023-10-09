@@ -256,6 +256,7 @@ def get_bbox(landmarks, cfg):
     scale_fac = cfg.HEADCAM.FRACTION
     center_point = bbox[0:2] + (bbox[2:4] / 2)
     wh_scaled = bbox[2:4] * scale_fac
+    wh_scaled[:] = np.max(wh_scaled)
     bbox_scaled = bbox
     bbox_scaled[0:2] = center_point - (wh_scaled * 0.5)
     bbox_scaled[2:4] = wh_scaled
@@ -263,11 +264,22 @@ def get_bbox(landmarks, cfg):
     return bbox_scaled
 
 
-def run_refinement(image_files, image_landmarks, cfg, net, normalize, model):
-    for image_file, landmarks in zip(image_files, image_landmarks):
+def run_refinement(image_files, image_landmarks, cfg, normalize, model):
+    redo_track = False
+    display = False
+
+    output_dir = r'C:\temp\SLPT\TestData\SLPT'
+    refined_landmarks = image_landmarks
+    output_file = os.path.basename(os.path.dirname(image_files[0]))
+    print(f'Processing {output_file}')
+    output_file = os.path.join(output_dir, f'{output_file}.npz')
+
+    if not redo_track and os.path.exists(output_file):
+        return
+
+    import tqdm
+    for i, (image_file, landmarks) in tqdm.tqdm(enumerate(zip(image_files, image_landmarks))):
         frame = cv2.imread(image_file)
-        im_width = frame.shape[1]
-        im_height = frame.shape[0]
 
         bbox = get_bbox(landmarks, cfg)
         alignment_input, trans = crop_img(frame.copy(), bbox, normalize)
@@ -278,20 +290,25 @@ def run_refinement(image_files, image_landmarks, cfg, net, normalize, model):
 
         outputs_initial = model(alignment_input.cuda(),
                                 landmarks_1=landmarks_model.cuda(),
-                                landmarks_2=landmarks_model.cuda(),
+                                landmarks_2=None,
                                 )
         output = outputs_initial[-1][0, -1, :, :].cpu().numpy()
 
         landmark = utils.transform_pixel_v2(output * cfg.MODEL.IMG_SIZE, trans, inverse=True)
 
-        # cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 0, 255), 3)
-        frame = draw_landmark(landmarks, frame, (255, 0, 0))
-        frame = draw_landmark(landmark, frame)
-        # out.write(frame)
-        cv2.imshow('res', frame)
+        refined_landmarks[i, :, :] = landmark
 
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+        if display:
+            # cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 0, 255), 3)
+            frame = draw_landmark(landmarks, frame, (255, 0, 0))
+            frame = draw_landmark(landmark, frame)
+            # out.write(frame)
+            cv2.imshow('res', frame)
+
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+    np.savez(output_file, image_files=image_files, landmarks=refined_landmarks)
 
 
 device = None
@@ -343,26 +360,33 @@ def main():
     print('Finished loading face landmark detector')
 
     # test data file
-    test_data_file = r"C:\temp\SLPT\TestData\video_2023-06-05_17-26-06_Frames.npz"
-    npz_file = np.load(test_data_file)
-    image_files = npz_file['image_files']
-    landmarks = npz_file['landmarks']
+    import glob
+    test_files = glob.glob(r'C:\temp\SLPT\TestData\*.npz')
 
-    # Video writer
-    # out = cv2.VideoWriter('out4.mp4', cv2.VideoWriter_fourcc('M', 'P', '4', 'V'), 20, (im_width, im_height))
+    for test_data_file in test_files:
+        # test_data_file = r"C:\temp\SLPT\TestData\video_2023-06-05_17-26-06_Frames.npz"
+        # test_data_file = r"C:\temp\SLPT\TestData\Alfonso_l_sc04_001_39_1_Frames.npz"
+        # test_data_file = r"C:\temp\SLPT\TestData\FaceCapture_Catt_Act6.1Scene1_Frames.npz"
 
-    normalize = transforms.Normalize(
-        mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-    )
-    normalize = transforms.Compose([
-        transforms.ToTensor(),
-        normalize,
-    ])
+        npz_file = np.load(test_data_file)
+        image_files = npz_file['image_files']
+        landmarks = npz_file['landmarks']
 
-    if do_refinement:
-        run_refinement(image_files, landmarks, cfg, net, normalize, model)
-    else:
-        run_with_detector(image_files, cfg, net, normalize, model)
+        # Video writer
+        # out = cv2.VideoWriter('out4.mp4', cv2.VideoWriter_fourcc('M', 'P', '4', 'V'), 20, (im_width, im_height))
+
+        normalize = transforms.Normalize(
+            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+        )
+        normalize = transforms.Compose([
+            transforms.ToTensor(),
+            normalize,
+        ])
+
+        if do_refinement:
+            run_refinement(image_files, landmarks, cfg, normalize, model)
+        else:
+            run_with_detector(image_files, cfg, net, normalize, model)
 
 
 if __name__ == '__main__':
