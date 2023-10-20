@@ -6,20 +6,20 @@ from Config import update_config
 
 from Backbone import get_face_alignment_net
 
-from utils import create_logger
 from SLPT import Sparse_alignment_network
-from Dataloader import WFLW_test_Dataset
 from SLPT.Transformer import Transformer
 
 import torch, cv2, math
 import numpy as np
-import pprint
 from torch import nn
 
 import torchvision.transforms as transforms
 import torch.backends.cudnn as cudnn
 import Face_Detector
 import utils
+import collections
+NamedRange = collections.namedtuple('NamedRange', ['name', 'range'])
+
 
 _CALIBRATION_FRAMES = {
     '1-1 Scale': 110,
@@ -39,6 +39,92 @@ _CALIBRATION_FRAMES = {
     'song_IcyGRL__v1_t10_STa_01_F_STa': 125,
     'video_2023-06-05_17-26-06': 0,
 }
+_COMPARISON_REGIONS = {
+    '1-1 Scale': [
+        NamedRange(name='Brows: non-specific', range=range(192, 245)),
+        NamedRange(name='Brows: blink', range=range(335, 364)),
+        NamedRange(name='Nose: lighting', range=range(341, 502)),
+        NamedRange(name='Brows: lighting', range=range(770, 898)),
+        NamedRange(name='Brows: lighting', range=range(934, 976)),
+    ],
+    'FaceCapture_Catt_Act6.1Scene1': [
+        NamedRange(name='Nose: non-specific', range=range(860, 1200)),
+        NamedRange(name='Brows: lighting', range=range(4429, 4516)),
+        NamedRange(name='Brows: non-specific', range=range(2130, 2325)),
+    ],
+    'FaceCapture_Catt_Act7Scene1': [
+        NamedRange(name='Brows: expression', range=range(435, 890)),
+        NamedRange(name='Brows: blink', range=range(0, 200)),
+        NamedRange(name='Nose: non-specific', range=range(665, 811)),
+        NamedRange(name='Nose: blink', range=range(3505, 3685)),
+    ],
+    'FaceCapture_Eddy_Act6.1Scene1': [
+        NamedRange(name='Brows: expression', range=range(1000, 1310)),
+        NamedRange(name='Brows: blink', range=range(194, 229)),
+        NamedRange(name='Nose: expression', range=range(1020, 1262)),
+        NamedRange(name='Nose: expression', range=range(2774, 3010)),
+        NamedRange(name='Brows: non-specific', range=range(3640, 3870)),
+    ],
+    'FaceCapture_Eddy_Act10.1Scene1': [
+        NamedRange(name='Brows: blink', range=range(0, 300)),
+        NamedRange(name='Brows: expression', range=range(850, 1100)),
+    ],
+    'FaceCapture_Eddy_Act10.5Scene1': [
+        NamedRange(name='Nose: non-specific', range=range(560, 700)),
+        NamedRange(name='Brows: non-specific', range=range(850, 1100)),
+    ],
+    'Fin_HiNIS_Node_07': [
+        NamedRange(name='Brows: expression', range=range(0, 207)),
+        NamedRange(name='Brows: expression', range=range(300, 460)),
+    ],
+    'Lucas_AFD_Demo_TP_HMC_tk06': [
+        NamedRange(name='Brows: expression', range=range(0, 309)),
+        NamedRange(name='Brows: blink', range=range(349, 381)),
+        NamedRange(name='Nose: expression', range=range(223, 345)),
+        NamedRange(name='Nose: expression', range=range(450, 610)),
+        NamedRange(name='Brows: expression', range=range(940, 1070)),
+    ],
+    'RichardCotton_ROM_Line_Neutral': [
+        NamedRange(name='Brows: expression', range=range(185, 454)),
+        NamedRange(name='Brows: blink', range=range(785, 849)),
+        NamedRange(name='Nose: expression', range=range(444, 610)),
+    ],
+    'RichardCotton_TestLine_04': [
+        NamedRange(name='Nose: non-specific', range=range(175, 400)),
+    ],
+    'RichardCotton_TestLine_06': [
+        NamedRange(name='Brows: expression', range=range(500, 800)),
+        NamedRange(name='Nose: expression', range=range(0, 200)),
+    ],
+    'RichardCotton_TestLine_09': [
+        NamedRange(name='Brows: expression', range=range(400, 535)),
+        NamedRange(name='Nose: expression', range=range(150, 250)),
+        NamedRange(name='Brows: blink', range=range(580, 620)),
+    ],
+    'ROM_CarloMestroni_20221128_055_01_Top': [
+        NamedRange(name='Brows: expression', range=range(2231, 2365)),
+        NamedRange(name='Brows: blink', range=range(18, 205)),
+        NamedRange(name='Nose: blink', range=range(320, 430)),
+        NamedRange(name='Nose: expression', range=range(2385, 2832)),
+    ],
+    'song_BossChick__v1_t5_STa_01_F_STa': [
+        NamedRange(name='Brows: non-specific', range=range(0, 107)),
+        NamedRange(name='Brows: expression', range=range(1093, 1313)),
+        NamedRange(name='Nose: non-specific', range=range(2197, 2409)),
+    ],
+    'song_IcyGRL__v1_t10_STa_01_F_STa': [
+        NamedRange(name='Nose: blink', range=range(105, 120)),
+        NamedRange(name='Brows: expression', range=range(1210, 1350)),
+        NamedRange(name='Brows: expression', range=range(1830, 1870)),
+        NamedRange(name='Brows: blink', range=range(0, 200)),
+    ],
+    'video_2023-06-05_17-26-06': [
+        NamedRange(name='Brows: expression', range=range(0, 127)),
+        NamedRange(name='Brows: expression', range=range(335, 420)),
+        NamedRange(name='Brows: blink', range=range(564, 610)),
+    ],
+}
+ROOT_DIR = r'z:\LocalWorkingRoot\SLPT'
 
 
 def parse_args():
@@ -423,7 +509,8 @@ def run_refinement(image_files, image_landmarks, cfg, normalize, model):
     redo_track = True
     display = False
 
-    output_dir = r'C:\temp\SLPT\TestData\SLPT'
+    output_dir = os.path.join(ROOT_DIR, r'Results\SLPT')
+    os.makedirs(output_dir, exist_ok=True)
     refined_landmarks = image_landmarks
     output_file = os.path.basename(os.path.dirname(image_files[0]))
     print(f'Processing {output_file}')
@@ -467,11 +554,12 @@ def run_refinement(image_files, image_landmarks, cfg, normalize, model):
 
 
 def run_refinement_cal(image_files, image_landmarks,
-                       cal_image_file, cal_image_landamrks, cfg, normalize, model):
+                       cal_image_file, cal_image_landmarks, cfg, normalize, model):
     redo_track = True
     display = False
 
-    output_dir = r'C:\temp\SLPT\TestData\SLPTCal'
+    output_dir = os.path.join(ROOT_DIR, r'Results\SLPTCal')
+    os.makedirs(output_dir, exist_ok=True)
     refined_landmarks = image_landmarks
     output_file = os.path.basename(os.path.dirname(image_files[0]))
     print(f'Processing {output_file}')
@@ -482,12 +570,12 @@ def run_refinement_cal(image_files, image_landmarks,
 
     frame = cv2.imread(cal_image_file)
 
-    bbox = get_bbox(cal_image_landamrks, cfg)
+    bbox = get_bbox(cal_image_landmarks, cfg)
     cal_input, trans = crop_img(frame.copy(), bbox, normalize)
 
     cal_landmarks_model = torch.from_numpy(
-        utils.transform_pixel_v2(cal_image_landamrks, trans) / cfg.MODEL.IMG_SIZE
-    ).view(1, 1, cal_image_landamrks.shape[0], cal_image_landamrks.shape[1]).float()
+        utils.transform_pixel_v2(cal_image_landmarks, trans) / cfg.MODEL.IMG_SIZE
+    ).view(1, 1, cal_image_landmarks.shape[0], cal_image_landmarks.shape[1]).float()
 
     model.module.calibrate(cal_input.cuda(), cal_landmarks_model.cuda())
 
@@ -529,7 +617,8 @@ def run_frame_to_frame(image_files, image_landmarks, cfg, normalize, model):
     redo_track = False
     display = False
 
-    output_dir = r'C:\temp\SLPT\TestData\Update'
+    output_dir = os.path.join(ROOT_DIR, r'Results\Update')
+    os.makedirs(output_dir, exist_ok=True)
     refined_landmarks = image_landmarks
     output_file = os.path.basename(os.path.dirname(image_files[0]))
     print(f'Processing {output_file}')
@@ -579,6 +668,7 @@ args = None
 
 def main():
     method = 'refinement_cal'  # refinement, detection, frame_to_frame
+    track_only_regions = True
 
     global args
     args = parse_args()
@@ -628,16 +718,27 @@ def main():
 
     # test data file
     import glob
-    test_files = glob.glob(r'C:\temp\SLPT\TestData\*.npz')
+    test_files = glob.glob(os.path.join(ROOT_DIR, r'Results\LDSDK\*.npz'))
 
     for test_data_file in test_files:
-        # test_data_file = r"C:\temp\SLPT\TestData\video_2023-06-05_17-26-06_Frames.npz"
-        # test_data_file = r"C:\temp\SLPT\TestData\Alfonso_l_sc04_001_39_1_Frames.npz"
-        # test_data_file = r"C:\temp\SLPT\TestData\FaceCapture_Catt_Act6.1Scene1_Frames.npz"
-
         npz_file = np.load(test_data_file)
-        image_files = npz_file['image_files']
-        landmarks = npz_file['landmarks']
+        if track_only_regions:
+            video_name = os.path.basename(test_data_file)[:-11]
+            if video_name not in _COMPARISON_REGIONS.keys():
+                raise RuntimeError(f'Missing video regions: {video_name}')
+            image_files = []
+            landmarks = []
+            for region in _COMPARISON_REGIONS[video_name]:
+                image_files.extend(
+                    npz_file['image_files'][region.range]
+                )
+                landmarks.append(
+                    npz_file['landmarks'][region.range, :, :]
+                )
+            landmarks = np.concatenate(landmarks, axis=0)
+        else:
+            image_files = npz_file['image_files']
+            landmarks = npz_file['landmarks']
 
         normalize = transforms.Normalize(
             mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
@@ -656,8 +757,8 @@ def main():
         elif method == 'refinement_cal':
             video_name = os.path.basename(test_data_file)[:-11]
             cal_ind = _CALIBRATION_FRAMES[video_name]
-            cal_image_file = image_files[cal_ind]
-            cal_image_landmarks = landmarks[cal_ind, :, :]
+            cal_image_file = npz_file['image_files'][cal_ind]
+            cal_image_landmarks = npz_file['landmarks'][cal_ind, :, :]
             run_refinement_cal(image_files, landmarks, cal_image_file, cal_image_landmarks, cfg, normalize, model)
         else:
             raise RuntimeError('Unknown method')
