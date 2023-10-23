@@ -363,6 +363,141 @@ class TransformerCal(Transformer):
         return tgt.permute(2, 0, 1, 3)
 
 
+class Sparse_alignment_network_cal(Sparse_alignment_network):
+    def __init__(self, num_point, d_model, trainable,
+                 return_interm_layers, dilation, nhead,  feedforward_dim,
+                 initial_path, cfg):
+        super().__init__(num_point, d_model, trainable,
+                 return_interm_layers, dilation, nhead,  feedforward_dim,
+                 initial_path, cfg)
+
+        # Transformer
+        self.Transformer = TransformerCal(num_point, d_model, nhead, cfg.TRANSFORMER.NUM_DECODER,
+                                       feedforward_dim, dropout=0.1)
+
+        self.feature_extractor_cal = nn.Conv2d(d_model, d_model, kernel_size=self.Sample_num, bias=False)
+
+        self._reset_parameters()
+
+        # backbone
+        self.backbone = get_face_alignment_net(cfg)
+
+    def calibrate(self, cal_image, cal_landmarks):
+
+        bs = cal_image.size(0)
+        calibration_feature_map = self.backbone(cal_image)
+
+        # cal features
+        ROI_anchor_cal_1, bbox_size_cal_1, start_anchor_cal_1 = self.ROI_1(cal_landmarks[:, -1, :, :].detach())
+        ROI_anchor_cal_1 = ROI_anchor_cal_1.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
+        ROI_feature_cal_1 = self.interpolation(calibration_feature_map, ROI_anchor_cal_1.detach()).view(bs, self.num_point, self.Sample_num,
+                                                                            self.Sample_num, self.d_model)
+        ROI_feature_cal_1 = ROI_feature_cal_1.view(bs * self.num_point, self.Sample_num, self.Sample_num,
+                                     self.d_model).permute(0, 3, 2, 1)
+
+        transformer_feature_cal_1 = self.feature_extractor_cal(ROI_feature_cal_1).view(bs, self.num_point, self.d_model)
+
+        ROI_anchor_cal_2, bbox_size_cal_2, start_anchor_cal_2 = self.ROI_2(cal_landmarks[:, -1, :, :].detach())
+        ROI_anchor_cal_2 = ROI_anchor_cal_2.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
+        ROI_feature_cal_2 = self.interpolation(calibration_feature_map, ROI_anchor_cal_2.detach()).view(bs, self.num_point, self.Sample_num,
+                                                                            self.Sample_num, self.d_model)
+        ROI_feature_cal_2 = ROI_feature_cal_2.view(bs * self.num_point, self.Sample_num, self.Sample_num,
+                                     self.d_model).permute(0, 3, 2, 1)
+
+        transformer_feature_cal_2 = self.feature_extractor_cal(ROI_feature_cal_2).view(bs, self.num_point, self.d_model)
+
+        ROI_anchor_cal_3, bbox_size_cal_3, start_anchor_cal_3 = self.ROI_3(cal_landmarks[:, -1, :, :].detach())
+        ROI_anchor_cal_3 = ROI_anchor_cal_3.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
+        ROI_feature_cal_3 = self.interpolation(calibration_feature_map, ROI_anchor_cal_3.detach()).view(bs, self.num_point, self.Sample_num,
+                                                                            self.Sample_num, self.d_model)
+        ROI_feature_cal_3 = ROI_feature_cal_3.view(bs * self.num_point, self.Sample_num, self.Sample_num,
+                                     self.d_model).permute(0, 3, 2, 1)
+        transformer_feature_cal_3 = self.feature_extractor_cal(ROI_feature_cal_3).view(bs, self.num_point, self.d_model)
+
+        self.transformer_feature_cal_1 = transformer_feature_cal_1
+        self.transformer_feature_cal_2 = transformer_feature_cal_2
+        self.transformer_feature_cal_3 = transformer_feature_cal_3
+
+    def forward(self, image):
+
+        bs = image.size(0)
+
+        output_list = []
+
+        feature_map = self.backbone(image)
+
+        initial_landmarks = self.initial_points.repeat(bs, 1, 1).to(image.device)
+
+        # stage_1
+        ROI_feature_1, bbox_size_1, start_anchor_1 = \
+            self.get_image_features(feature_map, initial_landmarks, stage=1)
+
+        transformer_feature_1 = self.feature_extractor(ROI_feature_1).view(bs, self.num_point, self.d_model)
+
+        offset_1 = self.Transformer(transformer_feature_1, self.transformer_feature_cal_1)
+        offset_1 = self.out_layer(offset_1)
+
+        landmarks_1 = start_anchor_1.unsqueeze(1) + bbox_size_1.unsqueeze(1) * offset_1
+        output_list.append(landmarks_1)
+
+        # stage_2
+        ROI_feature_2, bbox_size_2, start_anchor_2 = \
+            self.get_image_features(feature_map, landmarks_1[:, -1, :, :], stage=2)
+
+        transformer_feature_2 = self.feature_extractor(ROI_feature_2).view(bs, self.num_point, self.d_model)
+
+        offset_2 = self.Transformer(transformer_feature_2, self.transformer_feature_cal_2)
+        offset_2 = self.out_layer(offset_2)
+
+        landmarks_2 = start_anchor_2.unsqueeze(1) + bbox_size_2.unsqueeze(1) * offset_2
+        output_list.append(landmarks_2)
+
+        # stage_3
+        ROI_feature_3, bbox_size_3, start_anchor_3 = \
+            self.get_image_features(feature_map, landmarks_2[:, -1, :, :], stage=3)
+
+        transformer_feature_3 = self.feature_extractor(ROI_feature_3).view(bs, self.num_point, self.d_model)
+
+        offset_3 = self.Transformer(transformer_feature_3, self.transformer_feature_cal_3)
+        offset_3 = self.out_layer(offset_3)
+
+        landmarks_3 = start_anchor_3.unsqueeze(1) + bbox_size_3.unsqueeze(1) * offset_3
+        output_list.append(landmarks_3)
+
+        return output_list
+
+    def get_image_features(self, feature_map, landmarks, stage=1):
+        bs = feature_map.size(0)
+
+        # features
+        if stage == 1:
+            ROI_anchor_1, bbox_size_1, start_anchor_1 = self.ROI_1(landmarks.detach())
+            ROI_anchor_1 = ROI_anchor_1.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
+            ROI_feature_1 = self.interpolation(feature_map, ROI_anchor_1.detach()).view(bs, self.num_point, self.Sample_num,
+                                                                                self.Sample_num, self.d_model)
+            ROI_feature_1 = ROI_feature_1.view(bs * self.num_point, self.Sample_num, self.Sample_num,
+                                         self.d_model).permute(0, 3, 2, 1)
+            return ROI_feature_1, bbox_size_1, start_anchor_1
+
+        elif stage == 2:
+            ROI_anchor_2, bbox_size_2, start_anchor_2 = self.ROI_2(landmarks.detach())
+            ROI_anchor_2 = ROI_anchor_2.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
+            ROI_feature_2 = self.interpolation(feature_map, ROI_anchor_2.detach()).view(bs, self.num_point, self.Sample_num,
+                                                                                self.Sample_num, self.d_model)
+            ROI_feature_2 = ROI_feature_2.view(bs * self.num_point, self.Sample_num, self.Sample_num,
+                                         self.d_model).permute(0, 3, 2, 1)
+            return ROI_feature_2, bbox_size_2, start_anchor_2
+        else:
+            ROI_anchor_3, bbox_size_3, start_anchor_3 = self.ROI_3(landmarks.detach())
+            ROI_anchor_3 = ROI_anchor_3.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
+            ROI_feature_3 = self.interpolation(feature_map, ROI_anchor_3.detach()).view(bs, self.num_point, self.Sample_num,
+                                                                                self.Sample_num, self.d_model)
+            ROI_feature_3 = ROI_feature_3.view(bs * self.num_point, self.Sample_num, self.Sample_num,
+                                         self.d_model).permute(0, 3, 2, 1)
+
+            return ROI_feature_3, bbox_size_3, start_anchor_3
+
+
 class Sparse_alignment_network_cal_refine(Sparse_alignment_network):
     def __init__(self, num_point, d_model, trainable,
                  return_interm_layers, dilation, nhead,  feedforward_dim,
@@ -484,6 +619,49 @@ def run_with_detector(image_files, cfg, net, normalize, model):
                 break
 
 
+def run_with_detector_cal(image_files, cal_image_file, cal_image_landmarks,
+                          cfg, net, normalize, model):
+
+    frame = cv2.imread(cal_image_file)
+
+    bbox = get_bbox(cal_image_landmarks, cfg)
+    cal_input, trans = crop_img(frame.copy(), bbox, normalize)
+
+    cal_landmarks_model = torch.from_numpy(
+        utils.transform_pixel_v2(cal_image_landmarks, trans) / cfg.MODEL.IMG_SIZE
+    ).view(1, 1, cal_image_landmarks.shape[0], cal_image_landmarks.shape[1]).float()
+
+    model.module.calibrate(cal_input.cuda(), cal_landmarks_model.cuda())
+
+    for image_file in image_files:
+        frame = cv2.imread(image_file)
+        im_width = frame.shape[1]
+        im_height = frame.shape[0]
+
+        dets = face_detection(frame.copy(), net, 320, 240)
+        bbox = find_max_box(dets)
+
+        if bbox is not None:
+            bbox[0] = int(bbox[0] / 320.0 * im_width + 0.5)
+            bbox[2] = int(bbox[2] / 320.0 * im_width + 0.5)
+            bbox[1] = int(bbox[1] / 240.0 * im_height + 0.5)
+            bbox[3] = int(bbox[3] / 240.0 * im_height + 0.5)
+            alignment_input, trans = crop_img(frame.copy(), bbox, normalize)
+
+            outputs_initial = model(alignment_input.cuda())
+            output = outputs_initial[2][0, -1, :, :].cpu().numpy()
+
+            landmark = utils.transform_pixel_v2(output * cfg.MODEL.IMG_SIZE, trans, inverse=True)
+
+            # cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 0, 255), 3)
+            frame = draw_landmark(landmark, frame)
+            # out.write(frame)
+            cv2.imshow('res', frame)
+
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+
 def get_bbox(landmarks, cfg):
     max_index = np.max(landmarks, axis=0)
     min_index = np.min(landmarks, axis=0)
@@ -558,7 +736,7 @@ def run_refinement_cal(image_files, image_landmarks,
     redo_track = True
     display = False
 
-    output_dir = os.path.join(ROOT_DIR, r'Results\SLPTCal')
+    output_dir = os.path.join(ROOT_DIR, r'Results\SLPTCalCon')
     os.makedirs(output_dir, exist_ok=True)
     refined_landmarks = image_landmarks
     output_file = os.path.basename(os.path.dirname(image_files[0]))
@@ -667,7 +845,7 @@ args = None
 
 
 def main():
-    method = 'refinement_cal'  # refinement, detection, frame_to_frame
+    method = 'detector_cal'  # refinement, refinement_cal, detector, detector_cal, frame_to_frame
     track_only_regions = True
 
     global args
@@ -695,11 +873,16 @@ def main():
                                                 cfg.MODEL.TRAINABLE, cfg.MODEL.INTER_LAYER,
                                                 cfg.MODEL.DILATION, cfg.TRANSFORMER.NHEAD,
                                                 cfg.TRANSFORMER.FEED_DIM, cfg.HEADCAM.INITIAL_PATH, cfg)
-    elif method == 'refinement_cal':
+    elif method in ['refinement_cal', ]:
         model = Sparse_alignment_network_cal_refine(cfg.HEADCAMCAL.NUM_POINT, cfg.MODEL.OUT_DIM,
                                                 cfg.MODEL.TRAINABLE, cfg.MODEL.INTER_LAYER,
                                                 cfg.MODEL.DILATION, cfg.TRANSFORMER.NHEAD,
                                                 cfg.TRANSFORMER.FEED_DIM, cfg.HEADCAMCAL.INITIAL_PATH, cfg)
+    elif method in ['detector_cal', ]:
+        model = Sparse_alignment_network_cal(cfg.HEADCAMCAL.NUM_POINT, cfg.MODEL.OUT_DIM,
+                                                    cfg.MODEL.TRAINABLE, cfg.MODEL.INTER_LAYER,
+                                                    cfg.MODEL.DILATION, cfg.TRANSFORMER.NHEAD,
+                                                    cfg.TRANSFORMER.FEED_DIM, cfg.HEADCAMCAL.INITIAL_PATH, cfg)
     else:
         model = Sparse_alignment_network(cfg.HEADCAM.NUM_POINT, cfg.MODEL.OUT_DIM,
                                          cfg.MODEL.TRAINABLE, cfg.MODEL.INTER_LAYER,
@@ -752,14 +935,20 @@ def main():
             run_refinement(image_files, landmarks, cfg, normalize, model)
         elif method == 'frame_to_frame':
             run_frame_to_frame(image_files, landmarks, cfg, normalize, model)
-        elif method == 'detector':
-            run_with_detector(image_files, cfg, net, normalize, model)
         elif method == 'refinement_cal':
             video_name = os.path.basename(test_data_file)[:-11]
             cal_ind = _CALIBRATION_FRAMES[video_name]
             cal_image_file = npz_file['image_files'][cal_ind]
             cal_image_landmarks = npz_file['landmarks'][cal_ind, :, :]
             run_refinement_cal(image_files, landmarks, cal_image_file, cal_image_landmarks, cfg, normalize, model)
+        elif method == 'detector':
+            run_with_detector(image_files, cfg, net, normalize, model)
+        elif method == 'detector_cal':
+            video_name = os.path.basename(test_data_file)[:-11]
+            cal_ind = _CALIBRATION_FRAMES[video_name]
+            cal_image_file = npz_file['image_files'][cal_ind]
+            cal_image_landmarks = npz_file['landmarks'][cal_ind, :, :]
+            run_with_detector_cal(image_files, cal_image_file, cal_image_landmarks, cfg, net, normalize, model)
         else:
             raise RuntimeError('Unknown method')
 
