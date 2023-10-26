@@ -149,6 +149,8 @@ def parse_args():
     parser.add_argument('--dataDir', help='data directory', type=str, default='./')
     parser.add_argument('--prevModelDir', help='prev Model directory', type=str, default=None)
 
+    parser.add_argument('--label', help='Label', type=str, default=None)
+
     args = parser.parse_args()
 
     return args
@@ -683,11 +685,11 @@ def get_bbox(landmarks, cfg):
     return bbox_scaled
 
 
-def run_refinement(image_files, image_landmarks, cfg, normalize, model):
+def run_refinement(image_files, image_landmarks, cfg, normalize, model, label):
     redo_track = True
     display = False
 
-    output_dir = os.path.join(ROOT_DIR, r'Results\SLPT')
+    output_dir = os.path.join(ROOT_DIR, 'Results', label)
     os.makedirs(output_dir, exist_ok=True)
     refined_landmarks = image_landmarks
     output_file = os.path.basename(os.path.dirname(image_files[0]))
@@ -732,11 +734,11 @@ def run_refinement(image_files, image_landmarks, cfg, normalize, model):
 
 
 def run_refinement_cal(image_files, image_landmarks,
-                       cal_image_file, cal_image_landmarks, cfg, normalize, model):
+                       cal_image_file, cal_image_landmarks, cfg, normalize, model, label):
     redo_track = True
     display = False
 
-    output_dir = os.path.join(ROOT_DIR, r'Results\SLPTCalCon')
+    output_dir = os.path.join(ROOT_DIR, 'Results', label)
     os.makedirs(output_dir, exist_ok=True)
     refined_landmarks = image_landmarks
     output_file = os.path.basename(os.path.dirname(image_files[0]))
@@ -791,11 +793,11 @@ def run_refinement_cal(image_files, image_landmarks,
     np.savez(output_file, image_files=image_files, landmarks=refined_landmarks)
 
 
-def run_frame_to_frame(image_files, image_landmarks, cfg, normalize, model):
+def run_frame_to_frame(image_files, image_landmarks, cfg, normalize, model, label):
     redo_track = False
     display = False
 
-    output_dir = os.path.join(ROOT_DIR, r'Results\Update')
+    output_dir = os.path.join(ROOT_DIR, 'Results', label)
     os.makedirs(output_dir, exist_ok=True)
     refined_landmarks = image_landmarks
     output_file = os.path.basename(os.path.dirname(image_files[0]))
@@ -845,7 +847,7 @@ args = None
 
 
 def main():
-    method = 'detector_cal'  # refinement, refinement_cal, detector, detector_cal, frame_to_frame
+    method = 'refinement_cal'  # refinement, refinement_cal, detector, detector_cal, frame_to_frame
     track_only_regions = True
 
     global args
@@ -932,15 +934,15 @@ def main():
         ])
 
         if method == 'refinement':
-            run_refinement(image_files, landmarks, cfg, normalize, model)
+            run_refinement(image_files, landmarks, cfg, normalize, model, args.label)
         elif method == 'frame_to_frame':
-            run_frame_to_frame(image_files, landmarks, cfg, normalize, model)
+            run_frame_to_frame(image_files, landmarks, cfg, normalize, model, args.label)
         elif method == 'refinement_cal':
             video_name = os.path.basename(test_data_file)[:-11]
             cal_ind = _CALIBRATION_FRAMES[video_name]
             cal_image_file = npz_file['image_files'][cal_ind]
             cal_image_landmarks = npz_file['landmarks'][cal_ind, :, :]
-            run_refinement_cal(image_files, landmarks, cal_image_file, cal_image_landmarks, cfg, normalize, model)
+            run_refinement_cal(image_files, landmarks, cal_image_file, cal_image_landmarks, cfg, normalize, model, args.label)
         elif method == 'detector':
             run_with_detector(image_files, cfg, net, normalize, model)
         elif method == 'detector_cal':
