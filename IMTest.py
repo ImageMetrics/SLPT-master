@@ -335,12 +335,10 @@ class TransformerCal(Transformer):
                          num_decoder_layer=num_decoder_layer, dim_feedforward=dim_feedforward,
                          dropout=dropout, activation=activation, normalize_before=normalize_before)
         # calibration encoding
-        self.calibration_encoding = nn.Parameter(torch.randn(1, num_points, self.d_model))
+        # self.calibration_encoding = nn.Parameter(torch.randn(1, 2, self.d_model))
+        # self.frame_encoding = nn.Parameter(torch.randn(1, 2, self.d_model))
 
-        # SLPT_Inherent_Layer = Inherent_Layer(d_model, nhead, dim_feedforward, dropout,
-        #                                             activation, normalize_before)
-        # decoder_norm = nn.LayerNorm(d_model)
-        # self.Transformer_block = Transformer_block(SLPT_Inherent_Layer, num_decoder_layer, decoder_norm, return_intermediate=True)
+        self.calibration_encoding = nn.Parameter(torch.randn(1, num_points, d_model))
 
         self._reset_parameters()
 
@@ -349,6 +347,14 @@ class TransformerCal(Transformer):
 
         structure_encoding = self.structure_encoding.repeat(bs, 1, 1).permute(1, 0, 2)
         calibration_encoding = self.calibration_encoding.repeat(bs, 1, 1).permute(1, 0, 2)
+
+        # calibration_encoding = (
+        #         structure_encoding * self.calibration_encoding[:, 0, :].repeat(bs, num_feat, 1).permute(1, 0, 2)
+        # ) + self.calibration_encoding[:, 1, :].repeat(bs, num_feat, 1).permute(1, 0, 2)
+        # structure_encoding = (
+        #         structure_encoding * self.frame_encoding[:, 0, :].repeat(bs, num_feat, 1).permute(1, 0, 2)
+        # ) + self.frame_encoding[:, 1, :].repeat(bs, num_feat, 1).permute(1, 0, 2)
+
         landmark_query = self.landmark_query.repeat(bs, 1, 1).permute(1, 0, 2)
 
         src = src.permute(1, 0, 2)
@@ -526,6 +532,15 @@ class Sparse_alignment_network_cal_refine(Sparse_alignment_network):
         calibration_feature_map = self.backbone(cal_image)
 
         # cal features
+        ROI_anchor_cal_1, bbox_size_cal_1, start_anchor_cal_1 = self.ROI_1(cal_landmarks[:, -1, :, :].detach())
+        ROI_anchor_cal_1 = ROI_anchor_cal_1.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
+        ROI_feature_cal_1 = self.interpolation(calibration_feature_map, ROI_anchor_cal_1.detach()).view(bs, self.num_point, self.Sample_num,
+                                                                            self.Sample_num, self.d_model)
+        ROI_feature_cal_1 = ROI_feature_cal_1.view(bs * self.num_point, self.Sample_num, self.Sample_num,
+                                     self.d_model).permute(0, 3, 2, 1)
+
+        transformer_feature_cal_1 = self.feature_extractor_cal(ROI_feature_cal_1).view(bs, self.num_point, self.d_model)
+
         ROI_anchor_cal_2, bbox_size_cal_2, start_anchor_cal_2 = self.ROI_2(cal_landmarks[:, -1, :, :].detach())
         ROI_anchor_cal_2 = ROI_anchor_cal_2.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
         ROI_feature_cal_2 = self.interpolation(calibration_feature_map, ROI_anchor_cal_2.detach()).view(bs, self.num_point, self.Sample_num,
@@ -543,10 +558,12 @@ class Sparse_alignment_network_cal_refine(Sparse_alignment_network):
                                      self.d_model).permute(0, 3, 2, 1)
         transformer_feature_cal_3 = self.feature_extractor_cal(ROI_feature_cal_3).view(bs, self.num_point, self.d_model)
 
+        self.transformer_feature_cal_1 = transformer_feature_cal_1
         self.transformer_feature_cal_2 = transformer_feature_cal_2
         self.transformer_feature_cal_3 = transformer_feature_cal_3
 
-    def forward(self, image, landmarks_1=None, landmarks_2=None ):
+    def forward(self, image, initial_landmarks,
+                landmarks_1=None, landmarks_2=None ):
 
         bs = image.size(0)
 
@@ -554,7 +571,21 @@ class Sparse_alignment_network_cal_refine(Sparse_alignment_network):
 
         feature_map = self.backbone(image)
 
-        initial_landmarks = self.initial_points.repeat(bs, 1, 1).to(image.device)
+        # stage_1
+        ROI_anchor_1, bbox_size_1, start_anchor_1 = self.ROI_2(initial_landmarks[:, -1, :, :].detach())
+        ROI_anchor_1 = ROI_anchor_1.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
+        ROI_feature_1 = self.interpolation(feature_map, ROI_anchor_1.detach()).view(bs, self.num_point, self.Sample_num,
+                                                                                 self.Sample_num, self.d_model)
+        ROI_feature_1 = ROI_feature_1.view(bs * self.num_point, self.Sample_num, self.Sample_num,
+                                           self.d_model).permute(0, 3, 2, 1)
+
+        transformer_feature_1 = self.feature_extractor(ROI_feature_1).view(bs, self.num_point, self.d_model)
+
+        offset_1 = self.Transformer(transformer_feature_1, self.transformer_feature_cal_1)
+        offset_1 = self.out_layer(offset_1)
+
+        landmarks_1 = start_anchor_1.unsqueeze(1) + bbox_size_1.unsqueeze(1) * offset_1
+        output_list.append(landmarks_1)
 
         # stage_2
         ROI_anchor_2, bbox_size_2, start_anchor_2 = self.ROI_2(landmarks_1[:, -1, :, :].detach())
@@ -771,7 +802,8 @@ def run_refinement_cal(image_files, image_landmarks,
         ).view(1, 1, landmarks.shape[0], landmarks.shape[1]).float()
 
         outputs_initial = model(alignment_input.cuda(),
-                                landmarks_1=landmarks_model.cuda(),
+                                landmarks_model.cuda(),
+                                landmarks_1=None,
                                 landmarks_2=None,
                                 )
         output = outputs_initial[-1][0, -1, :, :].cpu().numpy()
