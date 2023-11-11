@@ -45,6 +45,7 @@ _C.MODEL.PRETRAINED = "./Config/HRNetW18C_lite.pth"
 _C.MODEL.INIT_WEIGHTS = True
 _C.MODEL.NUM_BLOCK = 2
 _C.MODEL.SAMPLE_NUM = 7
+_C.MODEL.HEATMAP = 64
 
 _C.TRANSFORMER = CN()
 _C.TRANSFORMER.NHEAD = 8
@@ -82,6 +83,7 @@ _C.HEADCAMCAL.ROOT = './Data/HEADCAMCAL'
 _C.HEADCAMCAL.NUM_POINT = 85
 _C.HEADCAMCAL.FRACTION = 1.20
 _C.HEADCAMCAL.INITIAL_PATH = './Config/init_85.npz'
+_C.HEADCAMCAL.IMAGE_DIR = 'HEADCAMCAL_Images'
 
 # High-Resoluion Net
 _C.MODEL.EXTRA = CN()
@@ -126,6 +128,7 @@ def update_config(cfg, args):
     if args.dataDir:
         cfg.DATA_DIR = args.dataDir
         cfg.WFLW.ROOT = os.path.join(cfg.DATA_DIR, 'WFLW')
+        cfg.HEADCAMCAL.ROOT = os.path.join(cfg.DATA_DIR, 'HEADCAMCAL')
 
     cfg.DATASET.ROOT = os.path.join(
         cfg.DATA_DIR, cfg.DATASET.ROOT
