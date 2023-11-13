@@ -525,7 +525,6 @@ class Sparse_alignment_network_cal_refine(Sparse_alignment_network):
         # backbone
         self.backbone = get_face_alignment_net(cfg)
 
-
     def calibrate(self, cal_image, cal_landmarks):
 
         bs = cal_image.size(0)
@@ -664,7 +663,7 @@ def run_with_detector_cal(image_files, cal_image_file, cal_image_landmarks,
         utils.transform_pixel_v2(cal_image_landmarks, trans) / cfg.MODEL.IMG_SIZE
     ).view(1, 1, cal_image_landmarks.shape[0], cal_image_landmarks.shape[1]).float()
 
-    model.module.calibrate(cal_input.cuda(), cal_landmarks_model.cuda())
+    model.calibrate(cal_input.cuda(), cal_landmarks_model.cuda())
 
     for image_file in image_files:
         frame = cv2.imread(image_file)
@@ -788,7 +787,7 @@ def run_refinement_cal(image_files, image_landmarks,
         utils.transform_pixel_v2(cal_image_landmarks, trans) / cfg.MODEL.IMG_SIZE
     ).view(1, 1, cal_image_landmarks.shape[0], cal_image_landmarks.shape[1]).float()
 
-    model.module.calibrate(cal_input.cuda(), cal_landmarks_model.cuda())
+    model.calibrate(cal_input.cuda(), cal_landmarks_model.cuda())
 
     import tqdm
     for i, (image_file, landmarks) in tqdm.tqdm(enumerate(zip(image_files, image_landmarks)), total=len(image_files)):
@@ -927,8 +926,8 @@ def main():
     checkpoint_file = os.path.join(args.modelDir, args.checkpoint)
     checkpoint = torch.load(checkpoint_file)
     pretrained_dict = {k: v for k, v in checkpoint.items()
-                       if k in model.module.state_dict().keys()}
-    model.module.load_state_dict(pretrained_dict)
+                       if k in model.state_dict().keys()}
+    model.load_state_dict(pretrained_dict)
     model.eval()
 
     print('Finished loading face landmark detector')
@@ -986,16 +985,13 @@ def main():
         else:
             raise RuntimeError('Unknown method')
 
+
 def calcuate_loss(name, pred, gt, trans):
 
     pred = (pred - trans[:, 2]) @ np.linalg.inv(trans[:, 0:2].T)
 
-    if name == 'WFLW':
-        norm = np.linalg.norm(gt[60, :] - gt[72, :])
-    elif name == '300W':
-        norm = np.linalg.norm(gt[36, :] - gt[45, :])
-    elif name == 'COFW':
-        norm = np.linalg.norm(gt[17, :] - gt[16, :])
+    if name == 'HEADCAMCAL':
+        norm = np.linalg.norm(gt[28, :] - gt[26, :])
     else:
         raise ValueError('Wrong Dataset')
 
@@ -1020,8 +1016,7 @@ def test():
                                                 cfg.MODEL.TRAINABLE, cfg.MODEL.INTER_LAYER,
                                                 cfg.MODEL.DILATION, cfg.TRANSFORMER.NHEAD,
                                                 cfg.TRANSFORMER.FEED_DIM, cfg.HEADCAMCAL.INITIAL_PATH, cfg)
-
-    model = torch.nn.DataParallel(model, device_ids=cfg.GPUS).cuda()
+    model.cuda()
 
     normalize = transforms.Normalize(
         mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
@@ -1055,23 +1050,30 @@ def test():
     checkpoint = torch.load(checkpoint_file)
 
     pretrained_dict = {k: v for k, v in checkpoint.items()
-                       if k in model.module.state_dict().keys()}
+                       if k in model.state_dict().keys()}
 
-    model.module.load_state_dict(pretrained_dict)
+    model.load_state_dict(pretrained_dict)
 
     model.eval()
 
     error_list = []
 
     with torch.no_grad():
-        for i, (input, meta) in enumerate(valid_loader):
+        for i, (input, input_cal, meta, meta_cal) in enumerate(valid_loader):
 
             Annotated_Points = meta['Annotated_Points'].numpy()[0]
+            ground_truth = meta['Points'].cuda().float()
+            calibration_points = meta_cal['Points'].cuda().float()
+            start_points = meta['StartPoints'].cuda().float()
             Trans = meta['trans'].numpy()[0]
 
-            outputs_initial = model(input.cuda())
+            calibration_points = calibration_points.view(1, 1, Annotated_Points.shape[0], Annotated_Points.shape[1]).float()
+            model.calibrate(input_cal.cuda(), calibration_points)
 
-            output = outputs_initial[2][0, -1, :, :].cpu().numpy()
+            start_points = start_points.view(1, 1, Annotated_Points.shape[0], Annotated_Points.shape[1]).float()
+            landmarks = model(input.cuda(), start_points, input_cal, calibration_points)
+
+            output = landmarks[2][0, -1, :, :].cpu().numpy()
 
             error = calcuate_loss(cfg.DATASET.DATASET, output * cfg.MODEL.IMG_SIZE, Annotated_Points, Trans)
 
