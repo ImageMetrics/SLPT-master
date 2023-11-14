@@ -18,8 +18,8 @@ import torch.backends.cudnn as cudnn
 import Face_Detector
 import utils
 import collections
-NamedRange = collections.namedtuple('NamedRange', ['name', 'range'])
 
+NamedRange = collections.namedtuple('NamedRange', ['name', 'range'])
 
 _CALIBRATION_FRAMES = {
     '1-1 Scale': 110,
@@ -373,15 +373,15 @@ class TransformerCal(Transformer):
 
 class Sparse_alignment_network_cal(Sparse_alignment_network):
     def __init__(self, num_point, d_model, trainable,
-                 return_interm_layers, dilation, nhead,  feedforward_dim,
+                 return_interm_layers, dilation, nhead, feedforward_dim,
                  initial_path, cfg):
         super().__init__(num_point, d_model, trainable,
-                 return_interm_layers, dilation, nhead,  feedforward_dim,
-                 initial_path, cfg)
+                         return_interm_layers, dilation, nhead, feedforward_dim,
+                         initial_path, cfg)
 
         # Transformer
         self.Transformer = TransformerCal(num_point, d_model, nhead, cfg.TRANSFORMER.NUM_DECODER,
-                                       feedforward_dim, dropout=0.1)
+                                          feedforward_dim, dropout=0.1)
 
         self.feature_extractor_cal = nn.Conv2d(d_model, d_model, kernel_size=self.Sample_num, bias=False)
 
@@ -398,28 +398,37 @@ class Sparse_alignment_network_cal(Sparse_alignment_network):
         # cal features
         ROI_anchor_cal_1, bbox_size_cal_1, start_anchor_cal_1 = self.ROI_1(cal_landmarks[:, -1, :, :].detach())
         ROI_anchor_cal_1 = ROI_anchor_cal_1.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
-        ROI_feature_cal_1 = self.interpolation(calibration_feature_map, ROI_anchor_cal_1.detach()).view(bs, self.num_point, self.Sample_num,
-                                                                            self.Sample_num, self.d_model)
+        ROI_feature_cal_1 = self.interpolation(calibration_feature_map, ROI_anchor_cal_1.detach()).view(bs,
+                                                                                                        self.num_point,
+                                                                                                        self.Sample_num,
+                                                                                                        self.Sample_num,
+                                                                                                        self.d_model)
         ROI_feature_cal_1 = ROI_feature_cal_1.view(bs * self.num_point, self.Sample_num, self.Sample_num,
-                                     self.d_model).permute(0, 3, 2, 1)
+                                                   self.d_model).permute(0, 3, 2, 1)
 
         transformer_feature_cal_1 = self.feature_extractor_cal(ROI_feature_cal_1).view(bs, self.num_point, self.d_model)
 
         ROI_anchor_cal_2, bbox_size_cal_2, start_anchor_cal_2 = self.ROI_2(cal_landmarks[:, -1, :, :].detach())
         ROI_anchor_cal_2 = ROI_anchor_cal_2.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
-        ROI_feature_cal_2 = self.interpolation(calibration_feature_map, ROI_anchor_cal_2.detach()).view(bs, self.num_point, self.Sample_num,
-                                                                            self.Sample_num, self.d_model)
+        ROI_feature_cal_2 = self.interpolation(calibration_feature_map, ROI_anchor_cal_2.detach()).view(bs,
+                                                                                                        self.num_point,
+                                                                                                        self.Sample_num,
+                                                                                                        self.Sample_num,
+                                                                                                        self.d_model)
         ROI_feature_cal_2 = ROI_feature_cal_2.view(bs * self.num_point, self.Sample_num, self.Sample_num,
-                                     self.d_model).permute(0, 3, 2, 1)
+                                                   self.d_model).permute(0, 3, 2, 1)
 
         transformer_feature_cal_2 = self.feature_extractor_cal(ROI_feature_cal_2).view(bs, self.num_point, self.d_model)
 
         ROI_anchor_cal_3, bbox_size_cal_3, start_anchor_cal_3 = self.ROI_3(cal_landmarks[:, -1, :, :].detach())
         ROI_anchor_cal_3 = ROI_anchor_cal_3.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
-        ROI_feature_cal_3 = self.interpolation(calibration_feature_map, ROI_anchor_cal_3.detach()).view(bs, self.num_point, self.Sample_num,
-                                                                            self.Sample_num, self.d_model)
+        ROI_feature_cal_3 = self.interpolation(calibration_feature_map, ROI_anchor_cal_3.detach()).view(bs,
+                                                                                                        self.num_point,
+                                                                                                        self.Sample_num,
+                                                                                                        self.Sample_num,
+                                                                                                        self.d_model)
         ROI_feature_cal_3 = ROI_feature_cal_3.view(bs * self.num_point, self.Sample_num, self.Sample_num,
-                                     self.d_model).permute(0, 3, 2, 1)
+                                                   self.d_model).permute(0, 3, 2, 1)
         transformer_feature_cal_3 = self.feature_extractor_cal(ROI_feature_cal_3).view(bs, self.num_point, self.d_model)
 
         self.transformer_feature_cal_1 = transformer_feature_cal_1
@@ -435,6 +444,123 @@ class Sparse_alignment_network_cal(Sparse_alignment_network):
         feature_map = self.backbone(image)
 
         initial_landmarks = self.initial_points.repeat(bs, 1, 1).to(image.device)
+
+        # stage_1
+        ROI_feature_1, bbox_size_1, start_anchor_1 = \
+            self.get_image_features(feature_map, initial_landmarks, stage=1)
+
+        transformer_feature_1 = self.feature_extractor(ROI_feature_1).view(bs, self.num_point, self.d_model)
+
+        offset_1 = self.Transformer(transformer_feature_1, self.transformer_feature_cal_1)
+        offset_1 = self.out_layer(offset_1)
+
+        landmarks_1 = start_anchor_1.unsqueeze(1) + bbox_size_1.unsqueeze(1) * offset_1
+        output_list.append(landmarks_1)
+
+        # stage_2
+        ROI_feature_2, bbox_size_2, start_anchor_2 = \
+            self.get_image_features(feature_map, landmarks_1[:, -1, :, :], stage=2)
+
+        transformer_feature_2 = self.feature_extractor(ROI_feature_2).view(bs, self.num_point, self.d_model)
+
+        offset_2 = self.Transformer(transformer_feature_2, self.transformer_feature_cal_2)
+        offset_2 = self.out_layer(offset_2)
+
+        landmarks_2 = start_anchor_2.unsqueeze(1) + bbox_size_2.unsqueeze(1) * offset_2
+        output_list.append(landmarks_2)
+
+        # stage_3
+        ROI_feature_3, bbox_size_3, start_anchor_3 = \
+            self.get_image_features(feature_map, landmarks_2[:, -1, :, :], stage=3)
+
+        transformer_feature_3 = self.feature_extractor(ROI_feature_3).view(bs, self.num_point, self.d_model)
+
+        offset_3 = self.Transformer(transformer_feature_3, self.transformer_feature_cal_3)
+        offset_3 = self.out_layer(offset_3)
+
+        landmarks_3 = start_anchor_3.unsqueeze(1) + bbox_size_3.unsqueeze(1) * offset_3
+        output_list.append(landmarks_3)
+
+        return output_list
+
+    def get_image_features(self, feature_map, landmarks, stage=1):
+        bs = feature_map.size(0)
+
+        # features
+        if stage == 1:
+            ROI_anchor_1, bbox_size_1, start_anchor_1 = self.ROI_1(landmarks.detach())
+            ROI_anchor_1 = ROI_anchor_1.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
+            ROI_feature_1 = self.interpolation(feature_map, ROI_anchor_1.detach()).view(bs, self.num_point,
+                                                                                        self.Sample_num,
+                                                                                        self.Sample_num, self.d_model)
+            ROI_feature_1 = ROI_feature_1.view(bs * self.num_point, self.Sample_num, self.Sample_num,
+                                               self.d_model).permute(0, 3, 2, 1)
+            return ROI_feature_1, bbox_size_1, start_anchor_1
+
+        elif stage == 2:
+            ROI_anchor_2, bbox_size_2, start_anchor_2 = self.ROI_2(landmarks.detach())
+            ROI_anchor_2 = ROI_anchor_2.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
+            ROI_feature_2 = self.interpolation(feature_map, ROI_anchor_2.detach()).view(bs, self.num_point,
+                                                                                        self.Sample_num,
+                                                                                        self.Sample_num, self.d_model)
+            ROI_feature_2 = ROI_feature_2.view(bs * self.num_point, self.Sample_num, self.Sample_num,
+                                               self.d_model).permute(0, 3, 2, 1)
+            return ROI_feature_2, bbox_size_2, start_anchor_2
+        else:
+            ROI_anchor_3, bbox_size_3, start_anchor_3 = self.ROI_3(landmarks.detach())
+            ROI_anchor_3 = ROI_anchor_3.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
+            ROI_feature_3 = self.interpolation(feature_map, ROI_anchor_3.detach()).view(bs, self.num_point,
+                                                                                        self.Sample_num,
+                                                                                        self.Sample_num, self.d_model)
+            ROI_feature_3 = ROI_feature_3.view(bs * self.num_point, self.Sample_num, self.Sample_num,
+                                               self.d_model).permute(0, 3, 2, 1)
+
+            return ROI_feature_3, bbox_size_3, start_anchor_3
+
+
+class Sparse_alignment_network_cal_refine(Sparse_alignment_network):
+    def __init__(self, num_point, d_model, trainable,
+                 return_interm_layers, dilation, nhead, feedforward_dim,
+                 initial_path, cfg):
+        super().__init__(num_point, d_model, trainable,
+                         return_interm_layers, dilation, nhead, feedforward_dim,
+                         initial_path, cfg)
+
+        # Transformer
+        self.Transformer = TransformerCal(num_point, d_model, nhead, cfg.TRANSFORMER.NUM_DECODER,
+                                          feedforward_dim, dropout=0.1)
+
+        self.feature_extractor_cal = nn.Conv2d(d_model, d_model, kernel_size=self.Sample_num, bias=False)
+
+        self._reset_parameters()
+
+        # backbone
+        self.backbone = get_face_alignment_net(cfg)
+
+    def calibrate(self, cal_image, cal_landmarks):
+        bs = cal_image.size(0)
+        calibration_feature_map = self.backbone(cal_image)
+
+        # cal features
+        ROI_feature_cal_1, _, _ = self.get_image_features(calibration_feature_map, cal_landmarks, stage=1)
+        ROI_feature_cal_2, _, _ = self.get_image_features(calibration_feature_map, cal_landmarks, stage=2)
+        ROI_feature_cal_3, _, _ = self.get_image_features(calibration_feature_map, cal_landmarks, stage=3)
+
+        transformer_feature_cal_1 = self.feature_extractor_cal(ROI_feature_cal_1).view(bs, self.num_point, self.d_model)
+        transformer_feature_cal_2 = self.feature_extractor_cal(ROI_feature_cal_2).view(bs, self.num_point, self.d_model)
+        transformer_feature_cal_3 = self.feature_extractor_cal(ROI_feature_cal_3).view(bs, self.num_point, self.d_model)
+
+        self.transformer_feature_cal_1 = transformer_feature_cal_1
+        self.transformer_feature_cal_2 = transformer_feature_cal_2
+        self.transformer_feature_cal_3 = transformer_feature_cal_3
+
+    def forward(self, image, initial_landmarks,
+                landmarks_1=None, landmarks_2=None):
+        bs = image.size(0)
+
+        output_list = []
+
+        feature_map = self.backbone(image)
 
         # stage_1
         ROI_feature_1, bbox_size_1, start_anchor_1 = \
@@ -506,121 +632,6 @@ class Sparse_alignment_network_cal(Sparse_alignment_network):
             return ROI_feature_3, bbox_size_3, start_anchor_3
 
 
-class Sparse_alignment_network_cal_refine(Sparse_alignment_network):
-    def __init__(self, num_point, d_model, trainable,
-                 return_interm_layers, dilation, nhead,  feedforward_dim,
-                 initial_path, cfg):
-        super().__init__(num_point, d_model, trainable,
-                 return_interm_layers, dilation, nhead,  feedforward_dim,
-                 initial_path, cfg)
-
-        # Transformer
-        self.Transformer = TransformerCal(num_point, d_model, nhead, cfg.TRANSFORMER.NUM_DECODER,
-                                       feedforward_dim, dropout=0.1)
-
-        self.feature_extractor_cal = nn.Conv2d(d_model, d_model, kernel_size=self.Sample_num, bias=False)
-
-        self._reset_parameters()
-
-        # backbone
-        self.backbone = get_face_alignment_net(cfg)
-
-    def calibrate(self, cal_image, cal_landmarks):
-
-        bs = cal_image.size(0)
-        calibration_feature_map = self.backbone(cal_image)
-
-        # cal features
-        ROI_anchor_cal_1, bbox_size_cal_1, start_anchor_cal_1 = self.ROI_1(cal_landmarks[:, -1, :, :].detach())
-        ROI_anchor_cal_1 = ROI_anchor_cal_1.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
-        ROI_feature_cal_1 = self.interpolation(calibration_feature_map, ROI_anchor_cal_1.detach()).view(bs, self.num_point, self.Sample_num,
-                                                                            self.Sample_num, self.d_model)
-        ROI_feature_cal_1 = ROI_feature_cal_1.view(bs * self.num_point, self.Sample_num, self.Sample_num,
-                                     self.d_model).permute(0, 3, 2, 1)
-
-        transformer_feature_cal_1 = self.feature_extractor_cal(ROI_feature_cal_1).view(bs, self.num_point, self.d_model)
-
-        ROI_anchor_cal_2, bbox_size_cal_2, start_anchor_cal_2 = self.ROI_2(cal_landmarks[:, -1, :, :].detach())
-        ROI_anchor_cal_2 = ROI_anchor_cal_2.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
-        ROI_feature_cal_2 = self.interpolation(calibration_feature_map, ROI_anchor_cal_2.detach()).view(bs, self.num_point, self.Sample_num,
-                                                                            self.Sample_num, self.d_model)
-        ROI_feature_cal_2 = ROI_feature_cal_2.view(bs * self.num_point, self.Sample_num, self.Sample_num,
-                                     self.d_model).permute(0, 3, 2, 1)
-
-        transformer_feature_cal_2 = self.feature_extractor_cal(ROI_feature_cal_2).view(bs, self.num_point, self.d_model)
-
-        ROI_anchor_cal_3, bbox_size_cal_3, start_anchor_cal_3 = self.ROI_3(cal_landmarks[:, -1, :, :].detach())
-        ROI_anchor_cal_3 = ROI_anchor_cal_3.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
-        ROI_feature_cal_3 = self.interpolation(calibration_feature_map, ROI_anchor_cal_3.detach()).view(bs, self.num_point, self.Sample_num,
-                                                                            self.Sample_num, self.d_model)
-        ROI_feature_cal_3 = ROI_feature_cal_3.view(bs * self.num_point, self.Sample_num, self.Sample_num,
-                                     self.d_model).permute(0, 3, 2, 1)
-        transformer_feature_cal_3 = self.feature_extractor_cal(ROI_feature_cal_3).view(bs, self.num_point, self.d_model)
-
-        self.transformer_feature_cal_1 = transformer_feature_cal_1
-        self.transformer_feature_cal_2 = transformer_feature_cal_2
-        self.transformer_feature_cal_3 = transformer_feature_cal_3
-
-    def forward(self, image, initial_landmarks,
-                landmarks_1=None, landmarks_2=None ):
-
-        bs = image.size(0)
-
-        output_list = []
-
-        feature_map = self.backbone(image)
-
-        # stage_1
-        ROI_anchor_1, bbox_size_1, start_anchor_1 = self.ROI_2(initial_landmarks[:, -1, :, :].detach())
-        ROI_anchor_1 = ROI_anchor_1.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
-        ROI_feature_1 = self.interpolation(feature_map, ROI_anchor_1.detach()).view(bs, self.num_point, self.Sample_num,
-                                                                                 self.Sample_num, self.d_model)
-        ROI_feature_1 = ROI_feature_1.view(bs * self.num_point, self.Sample_num, self.Sample_num,
-                                           self.d_model).permute(0, 3, 2, 1)
-
-        transformer_feature_1 = self.feature_extractor(ROI_feature_1).view(bs, self.num_point, self.d_model)
-
-        offset_1 = self.Transformer(transformer_feature_1, self.transformer_feature_cal_1)
-        offset_1 = self.out_layer(offset_1)
-
-        landmarks_1 = start_anchor_1.unsqueeze(1) + bbox_size_1.unsqueeze(1) * offset_1
-        output_list.append(landmarks_1)
-
-        # stage_2
-        ROI_anchor_2, bbox_size_2, start_anchor_2 = self.ROI_2(landmarks_1[:, -1, :, :].detach())
-        ROI_anchor_2 = ROI_anchor_2.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
-        ROI_feature_2 = self.interpolation(feature_map, ROI_anchor_2.detach()).view(bs, self.num_point, self.Sample_num,
-                                                                                 self.Sample_num, self.d_model)
-        ROI_feature_2 = ROI_feature_2.view(bs * self.num_point, self.Sample_num, self.Sample_num,
-                                           self.d_model).permute(0, 3, 2, 1)
-
-        transformer_feature_2 = self.feature_extractor(ROI_feature_2).view(bs, self.num_point, self.d_model)
-
-        offset_2 = self.Transformer(transformer_feature_2, self.transformer_feature_cal_2)
-        offset_2 = self.out_layer(offset_2)
-
-        landmarks_2 = start_anchor_2.unsqueeze(1) + bbox_size_2.unsqueeze(1) * offset_2
-        output_list.append(landmarks_2)
-
-        # stage_3
-        ROI_anchor_3, bbox_size_3, start_anchor_3 = self.ROI_3(landmarks_2[:, -1, :, :].detach())
-        ROI_anchor_3 = ROI_anchor_3.view(bs, self.num_point * self.Sample_num * self.Sample_num, 2)
-        ROI_feature_3= self.interpolation(feature_map, ROI_anchor_3.detach()).view(bs, self.num_point, self.Sample_num,
-                                                                                   self.Sample_num, self.d_model)
-        ROI_feature_3 = ROI_feature_3.view(bs * self.num_point, self.Sample_num, self.Sample_num,
-                                           self.d_model).permute(0, 3, 2, 1)
-
-        transformer_feature_3 = self.feature_extractor(ROI_feature_3).view(bs, self.num_point, self.d_model)
-
-        offset_3 = self.Transformer(transformer_feature_3, self.transformer_feature_cal_3)
-        offset_3 = self.out_layer(offset_3)
-
-        landmarks_3 = start_anchor_3.unsqueeze(1) + bbox_size_3.unsqueeze(1) * offset_3
-        output_list.append(landmarks_3)
-
-        return output_list
-
-
 def run_with_detector(image_files, cfg, net, normalize, model):
     for image_file in image_files:
         frame = cv2.imread(image_file)
@@ -653,7 +664,6 @@ def run_with_detector(image_files, cfg, net, normalize, model):
 
 def run_with_detector_cal(image_files, cal_image_file, cal_image_landmarks,
                           cfg, net, normalize, model):
-
     frame = cv2.imread(cal_image_file)
 
     bbox = get_bbox(cal_image_landmarks, cfg)
@@ -908,20 +918,20 @@ def main():
                                                 cfg.TRANSFORMER.FEED_DIM, cfg.HEADCAM.INITIAL_PATH, cfg)
     elif method in ['refinement_cal', ]:
         model = Sparse_alignment_network_cal_refine(cfg.HEADCAMCAL.NUM_POINT, cfg.MODEL.OUT_DIM,
-                                                cfg.MODEL.TRAINABLE, cfg.MODEL.INTER_LAYER,
-                                                cfg.MODEL.DILATION, cfg.TRANSFORMER.NHEAD,
-                                                cfg.TRANSFORMER.FEED_DIM, cfg.HEADCAMCAL.INITIAL_PATH, cfg)
-    elif method in ['detector_cal', ]:
-        model = Sparse_alignment_network_cal(cfg.HEADCAMCAL.NUM_POINT, cfg.MODEL.OUT_DIM,
                                                     cfg.MODEL.TRAINABLE, cfg.MODEL.INTER_LAYER,
                                                     cfg.MODEL.DILATION, cfg.TRANSFORMER.NHEAD,
                                                     cfg.TRANSFORMER.FEED_DIM, cfg.HEADCAMCAL.INITIAL_PATH, cfg)
+    elif method in ['detector_cal', ]:
+        model = Sparse_alignment_network_cal(cfg.HEADCAMCAL.NUM_POINT, cfg.MODEL.OUT_DIM,
+                                             cfg.MODEL.TRAINABLE, cfg.MODEL.INTER_LAYER,
+                                             cfg.MODEL.DILATION, cfg.TRANSFORMER.NHEAD,
+                                             cfg.TRANSFORMER.FEED_DIM, cfg.HEADCAMCAL.INITIAL_PATH, cfg)
     else:
         model = Sparse_alignment_network(cfg.HEADCAM.NUM_POINT, cfg.MODEL.OUT_DIM,
                                          cfg.MODEL.TRAINABLE, cfg.MODEL.INTER_LAYER,
                                          cfg.MODEL.DILATION, cfg.TRANSFORMER.NHEAD,
                                          cfg.TRANSFORMER.FEED_DIM, cfg.HEADCAM.INITIAL_PATH, cfg)
-    model = torch.nn.DataParallel(model, device_ids=cfg.GPUS).cuda()
+    model.cuda()
 
     checkpoint_file = os.path.join(args.modelDir, args.checkpoint)
     checkpoint = torch.load(checkpoint_file)
@@ -973,7 +983,8 @@ def main():
             cal_ind = _CALIBRATION_FRAMES[video_name]
             cal_image_file = npz_file['image_files'][cal_ind]
             cal_image_landmarks = npz_file['landmarks'][cal_ind, :, :]
-            run_refinement_cal(image_files, landmarks, cal_image_file, cal_image_landmarks, cfg, normalize, model, args.label)
+            run_refinement_cal(image_files, landmarks, cal_image_file, cal_image_landmarks, cfg, normalize, model,
+                               args.label)
         elif method == 'detector':
             run_with_detector(image_files, cfg, net, normalize, model)
         elif method == 'detector_cal':
@@ -987,7 +998,6 @@ def main():
 
 
 def calcuate_loss(name, pred, gt, trans):
-
     pred = (pred - trans[:, 2]) @ np.linalg.inv(trans[:, 0:2].T)
 
     if name == 'HEADCAMCAL':
@@ -998,6 +1008,35 @@ def calcuate_loss(name, pred, gt, trans):
     error_real = np.mean(np.linalg.norm((pred - gt), axis=1) / norm)
 
     return error_real
+
+
+class Consistency_Loss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # HEADCAMCAL
+        # BROW_INNER_LEFT: 0
+        # BROW_INNER_RIGHT: 2
+        # BROW_OUTER_LEFT: 14
+        # BROW_OUTER_RIGHT: 15
+        # NOSE_RIDGE_TIP: 72
+
+        # self.feature_inds = [0, 2, 14, 15, 72]
+        self.feature_inds = [72, ]
+
+    def forward(self, input_tensor, ground_truth, feature_map, calibration_feature_map,
+                cal_landmarks, model, stage):
+        # consistency loss
+
+        # calibration features
+        ROI_feature_cal, _, _ = model.get_image_features(calibration_feature_map, cal_landmarks, stage=stage)
+
+        # landmark features
+        ROI_feature, _, _ = model.get_image_features(feature_map, input_tensor[:, -1, :, :], stage=stage)
+
+        loss_consistency = nn.functional.mse_loss(ROI_feature[self.feature_inds, :, :, :],
+                                                  ROI_feature_cal[self.feature_inds, :, :, :])
+
+        return loss_consistency
 
 
 def test():
@@ -1040,7 +1079,141 @@ def test():
 
     valid_loader = torch.utils.data.DataLoader(
         valid_dataset,
-        batch_size = 1,
+        batch_size=1,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=cfg.PIN_MEMORY
+    )
+
+    checkpoint_file = os.path.join(args.modelDir, args.checkpoint)
+    checkpoint = torch.load(checkpoint_file)
+
+    pretrained_dict = {k: v for k, v in checkpoint.items()
+                       if k in model.state_dict().keys()}
+
+    model.load_state_dict(pretrained_dict)
+
+    model.eval()
+
+    error_list = []
+    start_error_list = []
+    improvement_list = []
+
+    consistency_loss_instance = Consistency_Loss()
+
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(1, 2)
+
+    with torch.no_grad():
+        for i, (input, input_cal, meta, meta_cal) in enumerate(valid_loader):
+            Annotated_Points = meta['Annotated_Points'].numpy()[0]
+            ground_truth = meta['Points'].cuda().float()
+            calibration_points = meta_cal['Points'].cuda().float()
+            start_points = meta['StartPoints'].cuda().float()
+            Trans = meta['trans'].numpy()[0]
+
+            # calibration_points = calibration_points.view(1, 1, Annotated_Points.shape[0],
+            #                                              Annotated_Points.shape[1]).float()
+            model.calibrate(input_cal.cuda(), calibration_points)
+
+            # start_points = start_points.view(1, 1, Annotated_Points.shape[0], Annotated_Points.shape[1]).float()
+            landmarks = model(input.cuda(), start_points, input_cal, calibration_points)
+
+            output = landmarks[2][0, -1, :, :].cpu().numpy()
+
+            error = calcuate_loss(cfg.DATASET.DATASET, output * cfg.MODEL.IMG_SIZE, Annotated_Points, Trans)
+            start_error = calcuate_loss(cfg.DATASET.DATASET, start_points[0, :, :].cpu().numpy() * cfg.MODEL.IMG_SIZE, Annotated_Points, Trans)
+
+            feature_map = model.backbone(input.cuda())
+            calibration_feature_map = model.backbone(input_cal.cuda())
+            consistency_loss = consistency_loss_instance(landmarks[2], ground_truth, feature_map,
+                                                         calibration_feature_map,
+                                                         calibration_points, model, 3)
+            start_consistency_loss = consistency_loss_instance(start_points.view(1, 1, 85, 2), ground_truth, feature_map,
+                                                         calibration_feature_map,
+                                                         calibration_points, model, 3)
+
+            msg = f'Epoch: [{i}/{len(valid_loader)-1}]\t' \
+                  f'NME: {error * 100.0:.3f}%\t' \
+                  f'Start NME: {start_error * 100.0:.3f}%\t' \
+                  f'Consistency: {consistency_loss}\t' \
+                  f'Start Consistency: {start_consistency_loss}\t'
+
+            improvement = start_error - error
+
+            print(msg)
+            error_list.append(error)
+            start_error_list.append(start_error)
+            improvement_list.append(improvement)
+
+            # cal_im = input_cal.cpu().numpy().reshape([3, 256, 256]).transpose([1, 2, 0])
+            # cal_im = (cal_im * 0.3) + 0.5
+            # ax[0].cla()
+            # ax[0].imshow(cal_im)
+            # calibration_points = calibration_points.cpu().numpy() * 255
+            # ax[0].scatter(calibration_points[0, [0, 2, 14, 15, 72], 0],
+            #               calibration_points[0, [0, 2, 14, 15, 72], 1])
+            # im = input.cpu().numpy().reshape([3, 256, 256]).transpose([1, 2, 0])
+            # im = (im * 0.3) + 0.5
+            # ax[1].cla()
+            # ax[1].imshow(im)
+            # start_points = start_points.cpu().numpy() * 255
+            # ax[1].scatter(start_points[0, [0, 2, 14, 15, 72], 0],
+            #               start_points[0, [0, 2, 14, 15, 72], 1])
+            # output = output * 255
+            # ax[1].scatter(output[[0, 2, 14, 15, 72], 0],
+            #               output[[0, 2, 14, 15, 72], 1])
+            # fig.show()
+            # pass
+
+        print("finished")
+        print("Mean Error: {:.3f}".format((np.mean(np.array(error_list)) * 100.0)))
+        print("Mean Start Error: {:.3f}".format((np.mean(np.array(start_error_list)) * 100.0)))
+        print("Mean Improvement: {:.3f}".format((np.mean(np.array(improvement_list)) * 100.0)))
+
+
+
+def test_consistency():
+    args = parse_args()
+    update_config(cfg, args)
+
+    torch.backends.cudnn.benchmark = cfg.CUDNN.BENCHMARK
+    torch.backends.cudnn.deterministic = cfg.CUDNN.DETERMINISTIC
+    torch.backends.cudnn.enabled = cfg.CUDNN.ENABLED
+
+    # model = Sparse_alignment_network(cfg.WFLW.NUM_POINT, cfg.MODEL.OUT_DIM,
+    #                                 cfg.MODEL.TRAINABLE, cfg.MODEL.INTER_LAYER,
+    #                                 cfg.MODEL.DILATION, cfg.TRANSFORMER.NHEAD,
+    #                                 cfg.TRANSFORMER.FEED_DIM, cfg.WFLW.INITIAL_PATH, cfg)
+    model = Sparse_alignment_network_cal_refine(cfg.HEADCAMCAL.NUM_POINT, cfg.MODEL.OUT_DIM,
+                                                cfg.MODEL.TRAINABLE, cfg.MODEL.INTER_LAYER,
+                                                cfg.MODEL.DILATION, cfg.TRANSFORMER.NHEAD,
+                                                cfg.TRANSFORMER.FEED_DIM, cfg.HEADCAMCAL.INITIAL_PATH, cfg)
+    model.cuda()
+
+    normalize = transforms.Normalize(
+        mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+    )
+
+    from Dataloader.WFLW_loader import WFLWCal_Dataset
+    valid_dataset = WFLWCal_Dataset(
+        cfg, cfg.HEADCAMCAL.ROOT,
+        transform=transforms.Compose([
+            transforms.ToTensor(),
+            normalize,
+        ]),
+        annotation_file=os.path.join(cfg.HEADCAMCAL.ROOT,
+                                     'HEADCAMCAL_annotations', 'list_85pt_rect_attr_train_test',
+                                     'list_85pt_rect_attr_test.txt'),
+        calibration_annotation_file=os.path.join(cfg.HEADCAMCAL.ROOT,
+                                                 'HEADCAMCAL_annotations', 'list_85pt_rect_attr_train_test',
+                                                 'list_85pt_rect_attr_calibration_test.txt'),
+        wflw_config=cfg.HEADCAMCAL,
+    )
+
+    valid_loader = torch.utils.data.DataLoader(
+        valid_dataset,
+        batch_size=1,
         shuffle=False,
         num_workers=0,
         pin_memory=cfg.PIN_MEMORY
@@ -1058,36 +1231,43 @@ def test():
 
     error_list = []
 
+    consistency_loss_instance = Consistency_Loss()
+
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(1, 1)
+
     with torch.no_grad():
         for i, (input, input_cal, meta, meta_cal) in enumerate(valid_loader):
-
             Annotated_Points = meta['Annotated_Points'].numpy()[0]
             ground_truth = meta['Points'].cuda().float()
             calibration_points = meta_cal['Points'].cuda().float()
             start_points = meta['StartPoints'].cuda().float()
             Trans = meta['trans'].numpy()[0]
 
-            calibration_points = calibration_points.view(1, 1, Annotated_Points.shape[0], Annotated_Points.shape[1]).float()
-            model.calibrate(input_cal.cuda(), calibration_points)
+            feature_map = model.backbone(input.cuda())
+            calibration_feature_map = model.backbone(input_cal.cuda())
 
-            start_points = start_points.view(1, 1, Annotated_Points.shape[0], Annotated_Points.shape[1]).float()
-            landmarks = model(input.cuda(), start_points, input_cal, calibration_points)
+            n_steps = 25
+            range = 0.5
+            consistency_loss = np.empty((n_steps, n_steps))
+            for ii, x_off in enumerate(np.linspace(-range, range, n_steps)):
+                for ij, y_off in enumerate(np.linspace(-range, range, n_steps)):
+                    landmarks = ground_truth.clone()
+                    landmarks[:, :, 0] += x_off
+                    landmarks[:, :, 1] += y_off
 
-            output = landmarks[2][0, -1, :, :].cpu().numpy()
+                    consistency_loss[ii,ij] = consistency_loss_instance(landmarks.view(1, 1, 85, 2), ground_truth, feature_map,
+                                                         calibration_feature_map,
+                                                         calibration_points, model, 3)
 
-            error = calcuate_loss(cfg.DATASET.DATASET, output * cfg.MODEL.IMG_SIZE, Annotated_Points, Trans)
-
-            msg = 'Epoch: [{0}/{1}]\t' \
-                  'NME: {error:.3f}%\t'.format(
-                i, len(valid_loader), error=error*100.0)
-
-            print(msg)
-            error_list.append(error)
-
+            ax.cla()
+            ax.imshow(consistency_loss)
+            fig.show()
+            pass
         print("finished")
-        print("Mean Error: {:.3f}".format((np.mean(np.array(error_list)) * 100.0)))
 
 
 if __name__ == '__main__':
     # main()
-    test()
+    # test()
+    test_consistency()

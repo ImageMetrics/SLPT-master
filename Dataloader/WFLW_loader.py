@@ -211,6 +211,14 @@ class WFLW_Dataset(Dataset):
         if self.Transform is not None:
             input = self.Transform(input)
 
+        # import matplotlib.pyplot as plt
+        # plt.figure()
+        # im = input.cpu().numpy().reshape([3, 256, 256]).transpose([1, 2, 0])
+        # im = (im * 0.3) + 0.5
+        # plt.imshow(im)
+        # plt.scatter(Points[:, 0], Points[:, 1])
+        # plt.show()
+
         return input, meta
 
 
@@ -281,53 +289,12 @@ class WFLWCal_Dataset(WFLW_Dataset):
         return Data_base
 
     def __getitem__(self, idx):
-        db_slic = copy.deepcopy(self.database[idx])
-        Img_path = db_slic['Img']
-        BBox = db_slic['bbox']
-        Points = db_slic['point']
-        StartPoints = db_slic['start']
-        Annotated_Points = Points.copy()
-
-        Img = cv2.imread(Img_path)
-
-        Img_shape = Img.shape
-        Img = cv2.cvtColor(Img, cv2.COLOR_RGB2BGR)
-        if len(Img_shape) < 3:
-            Img = cv2.cvtColor(Img, cv2.COLOR_GRAY2RGB)
-        else:
-            if Img_shape[2] == 4:
-                Img = cv2.cvtColor(Img, cv2.COLOR_RGBA2RGB)
-            elif Img_shape[2] == 1:
-                Img = cv2.cvtColor(Img, cv2.COLOR_GRAY2RGB)
-
-        trans = utils.get_transforms(BBox, self.Fraction, 0.0, self.Image_size, shift_factor=[0.0, 0.0])
-
-        input = cv2.warpAffine(Img, trans, (int(self.Image_size), int(self.Image_size)), flags=cv2.INTER_LINEAR)
-
+        input, meta = super().__getitem__(idx)
+        StartPoints = self.database[idx]['start']
+        trans = meta['trans']
         for i in range(self.number_landmarks):
-            Points[i, 0:2] = utils.affine_transform(Points[i, 0:2], trans)
             StartPoints[i, 0:2] = utils.affine_transform(StartPoints[i, 0:2], trans)
-
-        meta = {
-            "Annotated_Points": Annotated_Points,
-            'Img_path': Img_path,
-            'Points': Points / (self.Image_size),
-            'StartPoints': StartPoints / (self.Image_size),
-            'BBox': BBox,
-            'trans': trans,
-            'Scale': self.Fraction,
-            'angle': 0.0,
-            'Translation': [0.0, 0.0],
-        }
-
-        # target = np.zeros((self.number_landmarks, self.Heatmap_size, self.Heatmap_size))
-        # tpts = Points / (self.Image_size - 1) * (self.Heatmap_size - 1)
-        # for i in range(self.number_landmarks):
-        #     if tpts[i, 1] > 0:
-        #         target[i] = generate_target(target[i], tpts[i], self.sigma)
-
-        if self.Transform is not None:
-            input = self.Transform(input)
+        meta['StartPoints'] = StartPoints / (self.Image_size)
 
         tmp = self.database
         self.database = self.calibration_database
