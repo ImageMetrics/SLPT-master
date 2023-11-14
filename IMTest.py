@@ -640,7 +640,17 @@ def get_bbox(landmarks, cfg):
 
 
 def run_bbox_cal(image_files, image_landmarks, cal_image_file, cal_image_landmarks,
-                          cfg, net, normalize, model):
+                          cfg, normalize, model, label):
+
+    display = True
+
+    output_dir = os.path.join(ROOT_DIR, 'Results', label)
+    os.makedirs(output_dir, exist_ok=True)
+    refined_landmarks = image_landmarks
+    output_file = os.path.basename(os.path.dirname(image_files[0]))
+    print(f'Processing {output_file}')
+    output_file = os.path.join(output_dir, f'{output_file}.npz')
+
     frame = cv2.imread(cal_image_file)
 
     bbox = get_bbox(cal_image_landmarks, cfg)
@@ -663,14 +673,18 @@ def run_bbox_cal(image_files, image_landmarks, cal_image_file, cal_image_landmar
         output = outputs_initial[2][0, -1, :, :].cpu().numpy()
 
         landmark = utils.transform_pixel_v2(output * cfg.MODEL.IMG_SIZE, trans, inverse=True)
+        refined_landmarks[i, :, :] = landmark
 
-        # cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 0, 255), 3)
-        frame = draw_landmark(landmark, frame)
-        # out.write(frame)
-        cv2.imshow('res', frame)
+        if display:
+            # cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 0, 255), 3)
+            frame = draw_landmark(landmark, frame)
+            # out.write(frame)
+            cv2.imshow('res', frame)
 
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+    np.savez(output_file, image_files=image_files, landmarks=refined_landmarks)
 
 
 def run_refinement(image_files, image_landmarks, cfg, normalize, model, label):
@@ -743,7 +757,7 @@ def run_refinement_cal(image_files, image_landmarks,
 
     cal_landmarks_model = torch.from_numpy(
         utils.transform_pixel_v2(cal_image_landmarks, trans) / cfg.MODEL.IMG_SIZE
-    ).view(1, 1, cal_image_landmarks.shape[0], cal_image_landmarks.shape[1]).float()
+    ).view(1, cal_image_landmarks.shape[0], cal_image_landmarks.shape[1]).float()
 
     model.calibrate(cal_input.cuda(), cal_landmarks_model.cuda())
 
@@ -756,7 +770,7 @@ def run_refinement_cal(image_files, image_landmarks,
 
         landmarks_model = torch.from_numpy(
             utils.transform_pixel_v2(landmarks, trans) / cfg.MODEL.IMG_SIZE
-        ).view(1, 1, landmarks.shape[0], landmarks.shape[1]).float()
+        ).view(1, landmarks.shape[0], landmarks.shape[1]).float()
 
         outputs_initial = model(alignment_input.cuda(),
                                 landmarks_model.cuda(),
@@ -782,9 +796,10 @@ def run_refinement_cal(image_files, image_landmarks,
     np.savez(output_file, image_files=image_files, landmarks=refined_landmarks)
 
 
-def run_frame_to_frame(image_files, image_landmarks, cfg, normalize, model, label):
-    redo_track = False
-    display = False
+def run_frame_to_frame(image_files, image_landmarks, cal_image_file, cal_image_landmarks,
+                       cfg, normalize, model, label):
+    redo_track = True
+    display = True
 
     output_dir = os.path.join(ROOT_DIR, 'Results', label)
     os.makedirs(output_dir, exist_ok=True)
@@ -796,6 +811,17 @@ def run_frame_to_frame(image_files, image_landmarks, cfg, normalize, model, labe
     if not redo_track and os.path.exists(output_file):
         return
 
+    frame = cv2.imread(cal_image_file)
+
+    bbox = get_bbox(cal_image_landmarks, cfg)
+    cal_input, trans = crop_img(frame.copy(), bbox, normalize)
+
+    cal_landmarks_model = torch.from_numpy(
+        utils.transform_pixel_v2(cal_image_landmarks, trans) / cfg.MODEL.IMG_SIZE
+    ).view(1, cal_image_landmarks.shape[0], cal_image_landmarks.shape[1]).float()
+
+    model.calibrate(cal_input.cuda(), cal_landmarks_model.cuda())
+
     import tqdm
     prev_landmarks = image_landmarks[0]
     for i, image_file in tqdm.tqdm(enumerate(image_files)):
@@ -806,12 +832,9 @@ def run_frame_to_frame(image_files, image_landmarks, cfg, normalize, model, labe
 
         landmarks_model = torch.from_numpy(
             utils.transform_pixel_v2(prev_landmarks, trans) / cfg.MODEL.IMG_SIZE
-        ).view(1, 1, prev_landmarks.shape[0], prev_landmarks.shape[1]).float()
+        ).view(1, prev_landmarks.shape[0], prev_landmarks.shape[1]).float()
 
-        outputs_initial = model(alignment_input.cuda(),
-                                landmarks_1=landmarks_model.cuda(),
-                                landmarks_2=None,
-                                )
+        outputs_initial = model(alignment_input.cuda(),landmarks_model.cuda())
         output = outputs_initial[-1][0, -1, :, :].cpu().numpy()
 
         landmark = utils.transform_pixel_v2(output * cfg.MODEL.IMG_SIZE, trans, inverse=True)
@@ -836,7 +859,7 @@ args = None
 
 
 def main():
-    method = 'bbox_cal'  # refinement, refinement_cal, detector, detector_cal, frame_to_frame
+    method = 'refinement_cal'  # bbox_cal, refinement, refinement_cal, detector, detector_cal, frame_to_frame
     track_only_regions = True
 
     global args
@@ -859,12 +882,12 @@ def main():
     net = net.to(device)
     print('Finished loading Face Detector!')
 
-    if method in ['refinement', 'frame_to_frame']:
+    if method in ['refinement', ]:
         model = Sparse_alignment_network_refine(cfg.HEADCAM.NUM_POINT, cfg.MODEL.OUT_DIM,
                                                 cfg.MODEL.TRAINABLE, cfg.MODEL.INTER_LAYER,
                                                 cfg.MODEL.DILATION, cfg.TRANSFORMER.NHEAD,
                                                 cfg.TRANSFORMER.FEED_DIM, cfg.HEADCAM.INITIAL_PATH, cfg)
-    elif method in ['refinement_cal', ]:
+    elif method in ['refinement_cal', 'frame_to_frame', ]:
         model = Sparse_alignment_network_cal_refine(cfg.HEADCAMCAL.NUM_POINT, cfg.MODEL.OUT_DIM,
                                                     cfg.MODEL.TRAINABLE, cfg.MODEL.INTER_LAYER,
                                                     cfg.MODEL.DILATION, cfg.TRANSFORMER.NHEAD,
@@ -925,7 +948,11 @@ def main():
         if method == 'refinement':
             run_refinement(image_files, landmarks, cfg, normalize, model, args.label)
         elif method == 'frame_to_frame':
-            run_frame_to_frame(image_files, landmarks, cfg, normalize, model, args.label)
+            video_name = os.path.basename(test_data_file)[:-11]
+            cal_ind = _CALIBRATION_FRAMES[video_name]
+            cal_image_file = npz_file['image_files'][cal_ind]
+            cal_image_landmarks = npz_file['landmarks'][cal_ind, :, :]
+            run_frame_to_frame(image_files, landmarks, cal_image_file, cal_image_landmarks, cfg, normalize, model, args.label)
         elif method == 'refinement_cal':
             video_name = os.path.basename(test_data_file)[:-11]
             cal_ind = _CALIBRATION_FRAMES[video_name]
@@ -946,7 +973,7 @@ def main():
             cal_ind = _CALIBRATION_FRAMES[video_name]
             cal_image_file = npz_file['image_files'][cal_ind]
             cal_image_landmarks = npz_file['landmarks'][cal_ind, :, :]
-            run_bbox_cal(image_files, landmarks, cal_image_file, cal_image_landmarks, cfg, net, normalize, model)
+            run_bbox_cal(image_files, landmarks, cal_image_file, cal_image_landmarks, cfg, normalize, model, args.label)
         else:
             raise RuntimeError('Unknown method')
 
@@ -974,8 +1001,8 @@ class Consistency_Loss(nn.Module):
         # BROW_OUTER_RIGHT: 15
         # NOSE_RIDGE_TIP: 72
 
-        # self.feature_inds = [0, 2, 14, 15, 72]
-        self.feature_inds = [72, ]
+        self.feature_inds = [0, 2, 14, 15, 72]
+        # self.feature_inds = [72, ]
 
     def forward(self, input_tensor, ground_truth, feature_map, calibration_feature_map,
                 cal_landmarks, model, stage):
@@ -1200,8 +1227,8 @@ def test_consistency():
             feature_map = model.backbone(input.cuda())
             calibration_feature_map = model.backbone(input_cal.cuda())
 
-            n_steps = 25
-            range = 0.5
+            n_steps = 11
+            range = 0.1
             consistency_loss = np.empty((n_steps, n_steps))
             for ii, x_off in enumerate(np.linspace(-range, range, n_steps)):
                 for ij, y_off in enumerate(np.linspace(-range, range, n_steps)):
